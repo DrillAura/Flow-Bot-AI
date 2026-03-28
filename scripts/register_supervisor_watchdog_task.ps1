@@ -1,6 +1,7 @@
 param(
     [string]$TaskName = "FlowBotSupervisorWatchdog",
     [string]$ProjectRoot = "C:\Users\Home\Desktop\Flow Bot AI - Trader AI Agent",
+    [string]$DeviceId = "",
     [string]$DataDir = ""
 )
 
@@ -13,6 +14,9 @@ $cmdWrapperPath = Join-Path $root "scripts\run_supervisor_watchdog.cmd"
 $registeredWith = ""
 try {
     $actionArgs = "-NoProfile -ExecutionPolicy Bypass -File `"$scriptPath`" -ProjectRoot `"$root`""
+    if (-not [string]::IsNullOrWhiteSpace($DeviceId)) {
+        $actionArgs += " -DeviceId `"$DeviceId`""
+    }
     if (-not [string]::IsNullOrWhiteSpace($DataDir)) {
         $actionArgs += " -DataDir `"$DataDir`""
     }

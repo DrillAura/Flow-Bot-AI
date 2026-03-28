@@ -10,6 +10,8 @@ from time import sleep
 from .backtest import CsvBacktester
 from .calibration import run_calibration
 from .config import load_config_from_env
+from .device_bootstrap import bootstrap_device_payload
+from .device_reports import export_device_report
 from .dashboard import load_supervisor_state_payload, write_supervisor_dashboard
 from .dashboard_app import serve_dashboard_app
 from .diagnostics import run_signal_diagnostics
@@ -282,6 +284,17 @@ def build_parser() -> argparse.ArgumentParser:
     migrate_runtime.add_argument("--project-root", default=".")
     migrate_runtime.add_argument("--device-id", default=None)
     migrate_runtime.add_argument("--move", action="store_true")
+
+    export_device = sub.add_parser("export-device-report", help="Write a Git-safe per-device runtime summary under reports/devices/<device-id>")
+    export_device.add_argument("--project-root", default=".")
+    export_device.add_argument("--device-id", default=None)
+
+    bootstrap_device = sub.add_parser("bootstrap-device", help="Prepare a device runtime and create desktop launchers for watchdog, dashboard, and device-report export")
+    bootstrap_device.add_argument("--project-root", default=".")
+    bootstrap_device.add_argument("--device-id", default=None)
+    bootstrap_device.add_argument("--desktop-dir", default=None)
+    bootstrap_device.add_argument("--migrate-legacy", action="store_true")
+    bootstrap_device.add_argument("--move-legacy", action="store_true")
 
     stop_runtime = sub.add_parser("stop-runtime", help="Request a clean stop for the supervisor and/or paper-forward runtime")
     stop_runtime.add_argument("--state-path", required=True)
@@ -678,6 +691,22 @@ def main() -> None:
                 project_root=args.project_root,
                 device_id=args.device_id,
                 copy_only=not args.move,
+            )
+        )
+        return
+
+    if args.command == "export-device-report":
+        _emit_json(export_device_report(project_root=args.project_root, device_id=args.device_id))
+        return
+
+    if args.command == "bootstrap-device":
+        _emit_json(
+            bootstrap_device_payload(
+                project_root=args.project_root,
+                device_id=args.device_id,
+                desktop_dir=args.desktop_dir,
+                migrate_legacy=args.migrate_legacy,
+                move_legacy=args.move_legacy,
             )
         )
         return

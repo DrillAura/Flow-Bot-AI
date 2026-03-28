@@ -473,3 +473,81 @@ This is the intended sync model:
 - GitHub = shared codebase and backup
 - per-device runtime = local data collection and paper/live state
 - later promotion decisions = based on summaries and shared code changes, not by merging raw CSV/log files blindly
+
+## Git-safe device reports
+
+Each device can now export a compact runtime summary into the tracked `reports/`
+folder without pushing raw CSV history or local supervisor logs into Git.
+
+Export a report for the current machine:
+
+```powershell
+python -m daytrading_bot.cli export-device-report --project-root .
+```
+
+Or explicitly for a named device id:
+
+```powershell
+python -m daytrading_bot.cli export-device-report --project-root . --device-id block30
+```
+
+This writes:
+
+- `reports/devices/<device-id>/latest.json`
+- `reports/devices/<device-id>/latest.md`
+
+The exported report is designed to be committed to GitHub safely. It includes:
+
+- active runtime paths
+- latest supervisor state path
+- history progress toward the `10d / 3d` OOS window
+- gate and paper-forward status
+- pair count
+- strategy-lab champion and promotion reason
+- forward summary metrics such as win rate, profit factor, drawdown, and net PnL
+
+Recommended practice:
+
+1. each device keeps raw runtime locally under `.runtime/<device-id>/...`
+2. each device periodically runs `export-device-report`
+3. only the compact report artifacts are shared via GitHub
+
+## Bootstrap a second device
+
+The repo can now prepare a new machine with device-specific runtime folders and
+desktop launchers in one step.
+
+Example for a laptop:
+
+```powershell
+python -m daytrading_bot.cli bootstrap-device --project-root . --device-id laptop-main --desktop-dir $HOME\Desktop
+```
+
+This creates desktop launchers such as:
+
+- `Flow Bot Dashboard (laptop-main).cmd`
+- `Flow Bot Watchdog (laptop-main).cmd`
+- `Flow Bot Device Report (laptop-main).cmd`
+
+There is also a PowerShell wrapper:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\bootstrap_device.ps1 -ProjectRoot . -DeviceId laptop-main -DesktopDir $HOME\Desktop
+```
+
+Optional migration flags:
+
+- `-MigrateLegacy`
+- `-MoveLegacy`
+
+Use them only if the target machine already has old top-level `data/` and `logs/`
+folders that should be copied or moved into `.runtime/<device-id>/...`.
+
+Suggested laptop setup flow:
+
+1. clone the GitHub repo
+2. set `FLOW_BOT_DEVICE_ID=laptop-main`
+3. run `bootstrap-device`
+4. start the watchdog from the generated desktop launcher
+5. start the dashboard from the generated desktop launcher
+6. periodically run the generated device-report launcher and commit the updated `reports/devices/laptop-main/*`

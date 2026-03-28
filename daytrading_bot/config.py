@@ -314,8 +314,11 @@ class BotConfig:
         return self.quality_rank(actual) >= self.quality_rank(minimum)
 
 
-def load_config_from_env(project_root: str | Path | None = None) -> tuple[BotConfig, ThreeCommasConfig]:
-    runtime_paths = ensure_runtime_dirs(build_runtime_paths(project_root=project_root))
+def load_config_from_env(
+    project_root: str | Path | None = None,
+    device_id: str | None = None,
+) -> tuple[BotConfig, ThreeCommasConfig]:
+    runtime_paths = ensure_runtime_dirs(build_runtime_paths(project_root=project_root, device_id=device_id))
     bot_config = BotConfig(
         pairs=_resolve_pairs_from_env(os.getenv("BOT_PAIRS", "")),
         active_strategy_id=os.getenv("BOT_ACTIVE_STRATEGY", "champion_breakout").strip() or "champion_breakout",

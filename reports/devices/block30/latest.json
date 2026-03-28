@@ -1,0 +1,32 @@
+{
+  "generated_at": "2026-03-28T21:12:29+00:00",
+  "device_id": "block30",
+  "runtime_paths": {
+    "project_root": "C:\\Users\\Home\\Desktop\\Flow Bot AI - Trader AI Agent",
+    "device_id": "block30",
+    "runtime_root": "C:\\Users\\Home\\Desktop\\Flow Bot AI - Trader AI Agent\\.runtime\\block30",
+    "data_dir": "C:\\Users\\Home\\Desktop\\Flow Bot AI - Trader AI Agent\\.runtime\\block30\\data",
+    "logs_dir": "C:\\Users\\Home\\Desktop\\Flow Bot AI - Trader AI Agent\\.runtime\\block30\\logs",
+    "ops_logs_dir": "C:\\Users\\Home\\Desktop\\Flow Bot AI - Trader AI Agent\\.runtime\\block30\\logs\\ops",
+    "telemetry_path": "C:\\Users\\Home\\Desktop\\Flow Bot AI - Trader AI Agent\\.runtime\\block30\\logs\\trading_events.jsonl",
+    "strategy_lab_state_path": "C:\\Users\\Home\\Desktop\\Flow Bot AI - Trader AI Agent\\.runtime\\block30\\logs\\strategy_lab_state.json"
+  },
+  "state_path": "C:\\Users\\Home\\Desktop\\Flow Bot AI - Trader AI Agent\\.runtime\\block30\\logs\\ops\\supervisor_watchdog_20260328_215608\\supervisor_state.json",
+  "monitor_status": "waiting_for_history",
+  "gate_status": "waiting_for_history",
+  "paper_forward_status": "idle",
+  "history_available_days": 1.5118055555555556,
+  "history_required_days": 13,
+  "sufficient_history": false,
+  "pair_count": 12,
+  "strategy_lab_champion": "champion_breakout",
+  "strategy_lab_promotion_reason": "promotion_cooldown_active",
+  "forward_closed_trades": 50,
+  "forward_win_rate": 0.0,
+  "forward_profit_factor": 0.0,
+  "forward_max_drawdown_pct": 0.3986107706979282,
+  "forward_net_pnl_eur": -39.861077069792856,
+  "go_live_ready": false,
+  "summary_markdown_path": "C:\\Users\\Home\\Desktop\\Flow Bot AI - Trader AI Agent\\reports\\devices\\block30\\latest.md",
+  "summary_json_path": "C:\\Users\\Home\\Desktop\\Flow Bot AI - Trader AI Agent\\reports\\devices\\block30\\latest.json"
+}
