@@ -1,0 +1,17 @@
+.runtime/
+data/
+logs/
+.build/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+.pytest_cache/
+.mypy_cache/
+.coverage
+.venv/
+venv/
+.env
+.env.*
+!.env.example
