@@ -6,7 +6,7 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 from daytrading_bot.config import BotConfig
 from daytrading_bot.dashboard_app import (
@@ -85,6 +85,7 @@ class DashboardAppTests(unittest.TestCase):
         self.assertIn("strategy_lab", overview)
         self.assertIn("personal_journal", overview)
         self.assertIn("fast_research_lab", overview)
+        self.assertIn("journal_strategy_alignment", overview)
         self.assertIn("filter_options", overview["shadow_portfolios"])
         self.assertIn("copilot", overview)
         self.assertEqual(overview["strategy_lab"]["current_paper_strategy_id"], "mean_reversion_vwap")
@@ -171,10 +172,15 @@ class DashboardAppTests(unittest.TestCase):
         self.assertIn("mae-mfe-chart", index)
         self.assertIn("trade-replay-chart", index)
         self.assertIn("personal-journal-summary-grid", index)
+        self.assertIn("journal-form-submit", index)
+        self.assertIn("journal-form-status", index)
         self.assertIn("personal-journal-entry-list", index)
         self.assertIn("journal-filter-asset", index)
         self.assertIn("journal-filter-strategy", index)
         self.assertIn("journal-filter-tag", index)
+        self.assertIn("journal-alignment-summary-grid", index)
+        self.assertIn("journal-alignment-family-body", index)
+        self.assertIn("journal-alignment-guardrails", index)
         self.assertIn("fast-research-summary-grid", index)
         self.assertIn("fast-research-card-list", index)
         self.assertIn("fast-research-filter-family", index)
@@ -187,7 +193,77 @@ class DashboardAppTests(unittest.TestCase):
         self.assertIn("copilot", overview)
         self.assertIn("personal_journal", overview)
         self.assertIn("fast_research_lab", overview)
+        self.assertIn("journal_strategy_alignment", overview)
         self.assertTrue(health["ok"])
+
+    def test_dashboard_server_appends_personal_journal_entry_via_post(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            data_dir = root / "data"
+            logs_root = root / "logs" / "ops"
+            run_dir = logs_root / "supervisor_watchdog_20260327_120000"
+            run_dir.mkdir(parents=True, exist_ok=True)
+            self._seed_histories(data_dir)
+            state_path = run_dir / "supervisor_state.json"
+            self._write_state(state_path)
+
+            with patch("daytrading_bot.dashboard_app.query_windows_task", return_value={"task_name": "FlowBotSupervisorWatchdog", "exists": True, "status": "Ready", "last_run": "now", "last_result": "0", "run_as_user": "Home", "details": {}}), patch(
+                "daytrading_bot.dashboard_app.load_live_ticker_snapshots",
+                return_value=self._mock_market_snapshots(),
+            ):
+                server, url = serve_dashboard_app(
+                    bot_config=self.bot_config,
+                    data_dir=data_dir,
+                    logs_root=logs_root,
+                    state_path=state_path,
+                    host="127.0.0.1",
+                    port=0,
+                )
+                thread = threading.Thread(target=server.serve_forever, daemon=True)
+                thread.start()
+                try:
+                    request = Request(
+                        f"{url}api/personal-journal/append",
+                        data=json.dumps(
+                            {
+                                "market": "crypto",
+                                "instrument": "SOL",
+                                "venue": "Kraken",
+                                "side": "long",
+                                "strategy_name": "manual_swing",
+                                "setup_family": "swing",
+                                "timeframe": "4H",
+                                "status": "closed",
+                                "entry_ts": "2026-03-30T08:00:00+00:00",
+                                "exit_ts": "2026-03-30T12:00:00+00:00",
+                                "entry_price": 120.0,
+                                "exit_price": 126.0,
+                                "pnl_eur": 14.5,
+                                "pnl_pct": 3.2,
+                                "fees_eur": 0.6,
+                                "size_notional_eur": 100.0,
+                                "confidence_before": 62,
+                                "confidence_after": 74,
+                                "lesson": "Trend hat getragen",
+                                "notes": "Plan eingehalten",
+                                "tags": "crypto,swing",
+                                "mistakes": "late_exit",
+                            }
+                        ).encode("utf-8"),
+                        headers={"Content-Type": "application/json"},
+                        method="POST",
+                    )
+                    response = json.loads(urlopen(request, timeout=5).read().decode("utf-8"))
+                finally:
+                    server.shutdown()
+                    server.server_close()
+                    thread.join(timeout=5)
+
+        self.assertTrue(response["ok"])
+        self.assertEqual(response["entry"]["instrument"], "SOL")
+        self.assertEqual(response["entry"]["strategy_name"], "manual_swing")
+        self.assertIn("personal_journal", response)
+        self.assertGreaterEqual(response["personal_journal"]["summary"]["total_entries"], 1)
 
     def test_query_windows_task_decodes_non_utf8_output(self) -> None:
         completed = type(

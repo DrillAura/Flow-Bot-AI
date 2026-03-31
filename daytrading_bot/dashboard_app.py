@@ -18,7 +18,13 @@ from .dashboard import load_supervisor_state_payload
 from .fast_research_lab import build_fast_research_lab_payload
 from .kraken import KrakenPublicClient, TIMEFRAME_WINDOWS
 from .models import PriceSample
-from .personal_journal import build_personal_journal_payload, run_personal_journal_report
+from .personal_journal import (
+    append_personal_trade,
+    build_personal_journal_payload,
+    build_personal_trade_entry,
+    ensure_personal_journal_path,
+    run_personal_journal_report,
+)
 from .reporting import run_forward_test_report
 from .shadow_portfolios import run_shadow_portfolio_report
 from .signal_observatory import run_signal_observatory_report
@@ -569,6 +575,127 @@ def _normalize_journal_learning_entry(entry: dict[str, Any] | str, *, fallback_t
     return {"title": title, "detail": detail, "takeaway": takeaway, **entry}
 
 
+def build_journal_strategy_alignment_overview(
+    personal_journal: dict[str, Any] | None,
+    strategy_lab: dict[str, Any] | None,
+    fast_research_lab: dict[str, Any] | None,
+) -> dict[str, Any]:
+    journal = personal_journal if isinstance(personal_journal, dict) else {}
+    strategy_payload = strategy_lab if isinstance(strategy_lab, dict) else {}
+    fast_payload = fast_research_lab if isinstance(fast_research_lab, dict) else {}
+    entries = [entry for entry in (journal.get("entries") or []) if isinstance(entry, dict)]
+    strategy_rows = [row for row in (strategy_payload.get("strategies") or []) if isinstance(row, dict)]
+    fast_rows = [row for row in (fast_payload.get("strategies") or []) if isinstance(row, dict)]
+    family_map = {
+        "breakout_recovery": ("breakout", "recovery", "reclaim"),
+        "mean_reversion": ("mean", "reversion", "vwap"),
+        "opening_range": ("opening range", "orb"),
+        "trend_continuation": ("trend", "continuation", "pullback"),
+        "fast_trading": ("scalp", "micro", "fast"),
+    }
+    family_counts: Counter[str] = Counter()
+    asset_counts: Counter[str] = Counter()
+    mistake_counts: Counter[str] = Counter()
+    for entry in entries:
+        asset = str(entry.get("asset") or "").upper().strip()
+        if asset:
+            asset_counts[asset] += 1
+        combined = " ".join(
+            [
+                str(entry.get("strategy") or ""),
+                str(entry.get("setup_family") or ""),
+                str(entry.get("lesson") or ""),
+                str(entry.get("notes") or ""),
+                " ".join(str(tag) for tag in (entry.get("tags") or [])),
+            ]
+        ).lower()
+        for family, keywords in family_map.items():
+            if any(keyword in combined for keyword in keywords):
+                family_counts[family] += 1
+        for mistake in entry.get("mistakes") or []:
+            mistake_counts[str(mistake)] += 1
+
+    bot_families: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in strategy_rows:
+        bot_families[str(row.get("family") or "unknown")].append(row)
+    family_alignment = [
+        {
+            "family": family,
+            "manual_trades": int(family_counts.get(family, 0)),
+            "bot_strategies": len(bot_families.get(family, [])),
+            "eligible_strategies": sum(1 for row in bot_families.get(family, []) if bool(row.get("eligible_for_promotion"))),
+            "champion_present": any(str(row.get("strategy_id") or "") == str(strategy_payload.get("current_paper_strategy_id") or "") for row in bot_families.get(family, [])),
+        }
+        for family in family_map
+    ]
+    tracked_assets = {str(row.get("label") or row.get("asset") or "").upper().replace("EUR", "") for row in (journal.get("asset_breakdown") or []) if isinstance(row, dict)}
+    bot_assets = {
+        str(row.get("label") or "").upper().replace("EUR", "")
+        for row in sum((list(item.get("asset_breakdown") or []) for item in [strategy_payload] if isinstance(item, dict)), [])
+        if isinstance(row, dict)
+    }
+    if not bot_assets:
+        bot_assets = {str(row.get("pair") or "").upper().replace("EUR", "") for row in (strategy_rows + fast_rows)}
+    asset_alignment = [
+        {
+            "asset": asset,
+            "manual_trades": count,
+            "tracked_by_bot": asset in bot_assets or asset in tracked_assets,
+            "fast_lane_seen": any(asset in str(row.get("label") or "").upper() or asset in str(row.get("strategy_id") or "").upper() for row in fast_rows),
+        }
+        for asset, count in asset_counts.most_common(10)
+    ]
+    guardrail_map = {
+        "late_stop": "Harter Stop und Time-Decay muessen frueher greifen.",
+        "late_exit": "Gewinne oder Verluste nicht durch Hoffen aussitzen.",
+        "fomo": "Nur auf definierte Reclaim-/Pullback-Zonen einsteigen.",
+        "overtrade": "Trade-Limit und Cooldown konsequent respektieren.",
+        "revenge": "Nach Verlusten keine aggressive Eskalation zulassen.",
+        "size": "Risk-per-trade klein halten statt ueber Positionsgroesse zu kompensieren.",
+    }
+    guardrails = [
+        {
+            "mistake": mistake,
+            "count": count,
+            "guardrail": next((text for key, text in guardrail_map.items() if key in mistake.lower()), "Diese Fehlerart braucht eine klarere Pre-Trade-Checkliste."),
+        }
+        for mistake, count in mistake_counts.most_common(8)
+    ]
+    strongest_family = family_alignment[0]["family"] if family_alignment else "n/a"
+    if family_alignment:
+        strongest_family = max(family_alignment, key=lambda row: row["manual_trades"])["family"]
+    recommended_focus = "Journal erst befuellen, dann wird die Auswertung belastbar."
+    if strongest_family == "fast_trading":
+        recommended_focus = "Deine manuellen Muster liegen nah an der Fast-Research-Lane. Beobachte dort Micro-Signale und Rejection-Gruende."
+    elif strongest_family == "breakout_recovery":
+        recommended_focus = "Deine manuellen Muster deuten auf Breakout-/Recovery-Logik. Vergleiche diese direkt mit dem Champion und den Recovery-Challengern."
+    elif strongest_family == "mean_reversion":
+        recommended_focus = "Du handelst bereits Mean-Reversion-artig. Beobachte VWAP- und Reclaim-Strategien enger."
+    return {
+        "summary": {
+            "manual_entries": len(entries),
+            "matched_families": sum(1 for row in family_alignment if row["manual_trades"] > 0),
+            "overlapping_assets": sum(1 for row in asset_alignment if row["tracked_by_bot"]),
+            "guardrail_matches": len(guardrails),
+            "strongest_family": strongest_family,
+            "recommended_focus": recommended_focus,
+        },
+        "family_alignment": family_alignment,
+        "asset_alignment": asset_alignment,
+        "guardrails": guardrails,
+        "beginner_notes": [
+            {
+                "term": "Human vs Bot",
+                "simple": "Hier siehst du, ob deine manuellen Gewohnheiten eher zu Breakout-, Mean-Reversion- oder Fast-Strategien passen.",
+            },
+            {
+                "term": "Guardrail",
+                "simple": "Ein Guardrail ist eine feste Regel, die typische menschliche Fehler wie FOMO oder zu spaete Stops abfangen soll.",
+            },
+        ],
+    }
+
+
 def _load_dashboard_telemetry_events(path: Path) -> list[dict[str, Any]]:
     if not path.exists():
         return []
@@ -1115,6 +1242,11 @@ def build_dashboard_overview(
         fast_research_payload,
         strategy_lab=strategy_lab,
     )
+    journal_strategy_alignment = build_journal_strategy_alignment_overview(
+        personal_journal,
+        strategy_lab,
+        fast_research_lab,
+    )
     launch = build_launch_overview(
         history_status=history_status,
         state_payload=state_payload,
@@ -1154,6 +1286,7 @@ def build_dashboard_overview(
         "strategy_lab": strategy_lab,
         "personal_journal": personal_journal,
         "fast_research_lab": fast_research_lab,
+        "journal_strategy_alignment": journal_strategy_alignment,
         "copilot": copilot,
         "task": query_windows_task(task_name),
         "recent_runs": recent_runs,
@@ -1178,6 +1311,8 @@ def serve_dashboard_app(
     data_dir = data_dir.resolve()
     if state_path is not None:
         state_path = state_path.resolve()
+    project_root = _infer_project_root(data_dir, logs_root)
+    personal_journal_path = _resolve_telemetry_path(project_root, bot_config.personal_journal_path)
 
     activity = {"last_request": monotonic()}
 
@@ -1209,6 +1344,22 @@ def serve_dashboard_app(
                 return
             self.send_error(404, "Not Found")
 
+        def do_POST(self) -> None:  # noqa: N802
+            activity["last_request"] = monotonic()
+            if self.path == "/api/personal-journal/append":
+                try:
+                    payload = self._read_json()
+                    appended = self._append_personal_journal_entry(payload if isinstance(payload, dict) else {})
+                except ValueError as exc:
+                    self._send_json({"ok": False, "error": str(exc)}, status=400)
+                    return
+                except Exception as exc:
+                    self._send_json({"ok": False, "error": str(exc)}, status=500)
+                    return
+                self._send_json(appended, status=201)
+                return
+            self.send_error(404, "Not Found")
+
         def log_message(self, format: str, *args: Any) -> None:  # noqa: A003
             return
 
@@ -1220,14 +1371,89 @@ def serve_dashboard_app(
             self.end_headers()
             self.wfile.write(encoded)
 
-        def _send_json(self, payload: dict[str, Any]) -> None:
+        def _send_json(self, payload: dict[str, Any], *, status: int = 200) -> None:
             encoded = json.dumps(payload, indent=2, default=_json_default).encode("utf-8")
-            self.send_response(200)
+            self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(encoded)))
             self.end_headers()
             self.wfile.write(encoded)
+
+        def _read_json(self) -> dict[str, Any]:
+            content_length = int(self.headers.get("Content-Length", "0") or 0)
+            if content_length <= 0:
+                raise ValueError("request body is empty")
+            raw = self.rfile.read(content_length).decode("utf-8")
+            return json.loads(raw)
+
+        def _append_personal_journal_entry(self, payload: dict[str, Any]) -> dict[str, Any]:
+            instrument = str(payload.get("instrument") or "").strip()
+            strategy_name = str(payload.get("strategy_name") or "").strip()
+            if not instrument:
+                raise ValueError("instrument is required")
+            if not strategy_name:
+                raise ValueError("strategy_name is required")
+            ensure_personal_journal_path(personal_journal_path)
+            entry = build_personal_trade_entry(
+                market=str(payload.get("market") or "crypto").strip(),
+                instrument=instrument,
+                venue=str(payload.get("venue") or "").strip(),
+                side=str(payload.get("side") or "long").strip(),
+                strategy_name=strategy_name,
+                setup_family=str(payload.get("setup_family") or "manual").strip(),
+                timeframe=str(payload.get("timeframe") or "").strip(),
+                status=str(payload.get("status") or "closed").strip(),
+                entry_ts=self._normalize_optional_timestamp(payload.get("entry_ts")),
+                exit_ts=self._normalize_optional_timestamp(payload.get("exit_ts")),
+                entry_price=self._coerce_optional_float(payload.get("entry_price")),
+                exit_price=self._coerce_optional_float(payload.get("exit_price")),
+                pnl_eur=float(payload.get("pnl_eur") or 0.0),
+                pnl_pct=self._coerce_optional_float(payload.get("pnl_pct")),
+                fees_eur=float(payload.get("fees_eur") or 0.0),
+                size_notional_eur=self._coerce_optional_float(payload.get("size_notional_eur")),
+                confidence_before=self._coerce_optional_int(payload.get("confidence_before")),
+                confidence_after=self._coerce_optional_int(payload.get("confidence_after")),
+                lesson=str(payload.get("lesson") or "").strip(),
+                notes=str(payload.get("notes") or "").strip(),
+                tags=payload.get("tags"),
+                mistakes=payload.get("mistakes"),
+            )
+            appended = append_personal_trade(personal_journal_path, entry)
+            summary = run_personal_journal_report(personal_journal_path)
+            journal_payload = build_personal_journal_payload(summary)
+            return {
+                "ok": True,
+                "path": str(personal_journal_path),
+                "entry": appended,
+                "personal_journal": build_personal_journal_overview(journal_payload),
+            }
+
+        @staticmethod
+        def _coerce_optional_float(value: Any) -> float | None:
+            if value in (None, "", "null"):
+                return None
+            return float(value)
+
+        @staticmethod
+        def _coerce_optional_int(value: Any) -> int | None:
+            if value in (None, "", "null"):
+                return None
+            return int(value)
+
+        @staticmethod
+        def _normalize_optional_timestamp(value: Any) -> str | None:
+            raw = str(value or "").strip()
+            if not raw:
+                return None
+            normalized = raw.replace("Z", "+00:00")
+            try:
+                parsed = datetime.fromisoformat(normalized)
+            except ValueError as exc:
+                raise ValueError(f"invalid timestamp: {raw}") from exc
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=bot_config.timezone)
+            return parsed.astimezone(timezone.utc).isoformat(timespec="seconds")
 
     server = ThreadingHTTPServer((host, port), DashboardHandler)
     actual_host = host if host not in {"0.0.0.0", "::"} else "127.0.0.1"
@@ -1536,7 +1762,13 @@ def render_dashboard_app_html(overview: dict[str, Any]) -> str:
     .filter-row {{ display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }}
     .filter-control {{ display: grid; gap: 6px; min-width: 140px; }}
     .filter-control label {{ font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); }}
-    .filter-control select {{ appearance: none; border: 1px solid var(--line); background: rgba(255,255,255,0.04); color: var(--text); border-radius: 12px; padding: 10px 12px; font: inherit; }}
+    .filter-control select, .filter-control input, .filter-control textarea {{ appearance: none; border: 1px solid var(--line); background: rgba(255,255,255,0.04); color: var(--text); border-radius: 12px; padding: 10px 12px; font: inherit; }}
+    .filter-control textarea {{ min-height: 88px; resize: vertical; }}
+    .journal-form-grid {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }}
+    .journal-form-actions {{ display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-wrap: wrap; margin-top: 12px; }}
+    .journal-form-status {{ color: var(--muted); font-size: 12px; }}
+    .journal-form-status.good {{ color: var(--green); }}
+    .journal-form-status.bad {{ color: var(--red); }}
     .market-sidebar-toolbar {{ display: grid; gap: 10px; margin-bottom: 12px; }}
     .market-search-input {{ width: 100%; border: 1px solid var(--line); background: rgba(255,255,255,0.04); color: var(--text); border-radius: 12px; padding: 11px 14px; font: inherit; }}
     .quick-filter-bar {{ display: flex; flex-wrap: wrap; gap: 8px; }}
@@ -1752,6 +1984,36 @@ def render_dashboard_app_html(overview: dict[str, Any]) -> str:
           <div class="filter-control"><label for="journal-filter-strategy">Strategy</label><select id="journal-filter-strategy"></select></div>
           <div class="filter-control"><label for="journal-filter-tag">Tag</label><select id="journal-filter-tag"></select></div>
         </div>
+        <div style="height:12px"></div>
+        <div class="panel-subtitle">Neuen manuellen Trade lokal eintragen. Das landet nur in deinem persoenlichen Journal auf diesem Geraet.</div>
+        <div class="journal-form-grid">
+          <div class="filter-control"><label for="journal-form-market">Market</label><select id="journal-form-market"><option value="crypto">crypto</option><option value="stocks">stocks</option><option value="fx">fx</option><option value="metals">metals</option><option value="other">other</option></select></div>
+          <div class="filter-control"><label for="journal-form-instrument">Instrument</label><input id="journal-form-instrument" type="text" placeholder="z. B. SOL, BTCUSD, XAUUSD" /></div>
+          <div class="filter-control"><label for="journal-form-venue">Venue</label><input id="journal-form-venue" type="text" placeholder="Kraken, Broker, Bybit ..." /></div>
+          <div class="filter-control"><label for="journal-form-side">Side</label><select id="journal-form-side"><option value="long">long</option><option value="short">short</option></select></div>
+          <div class="filter-control"><label for="journal-form-strategy">Strategy name</label><input id="journal-form-strategy" type="text" placeholder="manual_swing, btc_micro ..." /></div>
+          <div class="filter-control"><label for="journal-form-setup-family">Setup family</label><input id="journal-form-setup-family" type="text" placeholder="breakout, swing, scalp ..." /></div>
+          <div class="filter-control"><label for="journal-form-timeframe">Timeframe</label><input id="journal-form-timeframe" type="text" placeholder="1M, 5M, 4H, 1D ..." /></div>
+          <div class="filter-control"><label for="journal-form-status">Status</label><select id="journal-form-status"><option value="closed">closed</option><option value="open">open</option></select></div>
+          <div class="filter-control"><label for="journal-form-entry-ts">Entry time</label><input id="journal-form-entry-ts" type="datetime-local" /></div>
+          <div class="filter-control"><label for="journal-form-exit-ts">Exit time</label><input id="journal-form-exit-ts" type="datetime-local" /></div>
+          <div class="filter-control"><label for="journal-form-entry-price">Entry price</label><input id="journal-form-entry-price" type="number" step="0.0001" /></div>
+          <div class="filter-control"><label for="journal-form-exit-price">Exit price</label><input id="journal-form-exit-price" type="number" step="0.0001" /></div>
+          <div class="filter-control"><label for="journal-form-pnl-eur">PnL EUR</label><input id="journal-form-pnl-eur" type="number" step="0.01" value="0" /></div>
+          <div class="filter-control"><label for="journal-form-pnl-pct">PnL %</label><input id="journal-form-pnl-pct" type="number" step="0.01" /></div>
+          <div class="filter-control"><label for="journal-form-size">Size EUR</label><input id="journal-form-size" type="number" step="0.01" /></div>
+          <div class="filter-control"><label for="journal-form-confidence-before">Confidence before</label><input id="journal-form-confidence-before" type="number" min="0" max="100" step="1" /></div>
+          <div class="filter-control"><label for="journal-form-confidence-after">Confidence after</label><input id="journal-form-confidence-after" type="number" min="0" max="100" step="1" /></div>
+          <div class="filter-control"><label for="journal-form-fees">Fees EUR</label><input id="journal-form-fees" type="number" step="0.01" value="0" /></div>
+          <div class="filter-control" style="grid-column: span 3;"><label for="journal-form-tags">Tags</label><input id="journal-form-tags" type="text" placeholder="kommagetrennt, z. B. crypto,scalp,breakout" /></div>
+          <div class="filter-control" style="grid-column: span 3;"><label for="journal-form-mistakes">Mistakes</label><input id="journal-form-mistakes" type="text" placeholder="kommagetrennt, z. B. late_stop,fomo" /></div>
+          <div class="filter-control" style="grid-column: span 3;"><label for="journal-form-lesson">Lesson</label><textarea id="journal-form-lesson" placeholder="Was war das wichtigste Learning aus diesem Trade?"></textarea></div>
+          <div class="filter-control" style="grid-column: span 3;"><label for="journal-form-notes">Notes</label><textarea id="journal-form-notes" placeholder="Freie Notizen, Emotionen, Planabweichungen, Makrokontext ..."></textarea></div>
+        </div>
+        <div class="journal-form-actions">
+          <div id="journal-form-status" class="journal-form-status">Noch kein Eintrag gesendet.</div>
+          <button id="journal-form-submit" class="quick-filter-btn active" type="button">Save trade to journal</button>
+        </div>
         <div class="chart-shell">
           <div class="chart"><div class="chart-caption"><span>Journal PnL and confidence</span><span id="personal-journal-chart-meta">n/a</span></div><div id="personal-journal-pnl-chart"></div><div style="height:12px"></div><div id="personal-journal-confidence-chart"></div></div>
           <div class="chart"><div class="chart-caption"><span>Journal learning and asset mix</span><span id="personal-journal-breakdown-meta">n/a</span></div><div id="personal-journal-winloss-chart"></div><div style="height:12px"></div><div id="personal-journal-asset-chart"></div></div>
@@ -1793,6 +2055,22 @@ def render_dashboard_app_html(overview: dict[str, Any]) -> str:
       <div class="chart-shell">
         <div class="chart"><div class="chart-caption"><span>Regime stability and gate friction</span><span id="strategy-lab-regime-meta">n/a</span></div><table class="comparison-table"><thead><tr><th>Strategy</th><th>Regimes</th><th>Dominant Share</th><th>Regime Gate</th><th>Failed Gates</th></tr></thead><tbody id="strategy-lab-regime-body"></tbody></table></div>
         <div class="chart"><div class="chart-caption"><span>Asset breadth and gate friction</span><span id="strategy-lab-asset-meta">n/a</span></div><table class="comparison-table"><thead><tr><th>Strategy</th><th>Assets</th><th>Dominant Share</th><th>Asset Gate</th><th>Failed Gates</th></tr></thead><tbody id="strategy-lab-asset-body"></tbody></table></div>
+      </div>
+    </section>
+    <section class="panel">
+      <div class="panel-header">
+        <div><h2>Journal vs Strategy Lab</h2><div class="panel-subtitle">Abgleich zwischen deinen manuellen Mustern, Bot-Strategien und Guardrails</div></div>
+      </div>
+      <div class="forward-grid" id="journal-alignment-summary-grid"></div>
+      <div style="height:12px"></div>
+      <div class="chart-shell">
+        <div class="chart"><div class="chart-caption"><span>Family alignment</span><span id="journal-alignment-meta">n/a</span></div><table class="comparison-table"><thead><tr><th>Family</th><th>Manual</th><th>Bot</th><th>Eligible</th><th>Champion</th></tr></thead><tbody id="journal-alignment-family-body"></tbody></table></div>
+        <div class="chart"><div class="chart-caption"><span>Asset overlap</span><span id="journal-alignment-asset-meta">n/a</span></div><table class="comparison-table"><thead><tr><th>Asset</th><th>Manual trades</th><th>Tracked by bot</th><th>Fast lane seen</th></tr></thead><tbody id="journal-alignment-asset-body"></tbody></table></div>
+      </div>
+      <div style="height:12px"></div>
+      <div class="layout-equal">
+        <div class="list" id="journal-alignment-guardrails"></div>
+        <div class="list" id="journal-alignment-beginner"></div>
       </div>
     </section>
     <section class="layout-equal">
@@ -2315,6 +2593,79 @@ def render_dashboard_app_html(overview: dict[str, Any]) -> str:
       }}).join('');
       return `<svg viewBox="0 0 ${{width}} ${{height}}" preserveAspectRatio="none"><defs><linearGradient id="market-area-${{escapeHtml(String(title || 'series'))}}" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stop-color="${{stroke}}" stop-opacity="0.30"></stop><stop offset="100%" stop-color="${{stroke}}" stop-opacity="0.02"></stop></linearGradient></defs>${{guides}}<path d="${{areaPath}}" fill="url(#market-area-${{escapeHtml(String(title || 'series'))}})"></path><path d="${{path}}" fill="none" stroke="${{stroke}}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"></path>${{points.slice(0, 1).map(point => `<circle cx="${{point.x.toFixed(2)}}" cy="${{point.y.toFixed(2)}}" r="4.5" fill="${{stroke}}"></circle>`).join('')}}<circle cx="${{points[points.length - 1].x.toFixed(2)}}" cy="${{points[points.length - 1].y.toFixed(2)}}" r="4.5" fill="${{stroke}}"></circle></svg>`;
     }}
+    function journalFormPayload() {{
+      const valueOf = id => {{
+        const node = document.getElementById(id);
+        return node ? node.value : '';
+      }};
+      return {{
+        market: valueOf('journal-form-market'),
+        instrument: valueOf('journal-form-instrument'),
+        venue: valueOf('journal-form-venue'),
+        side: valueOf('journal-form-side'),
+        strategy_name: valueOf('journal-form-strategy'),
+        setup_family: valueOf('journal-form-setup-family'),
+        timeframe: valueOf('journal-form-timeframe'),
+        status: valueOf('journal-form-status'),
+        entry_ts: normalizeJournalDate(valueOf('journal-form-entry-ts')),
+        exit_ts: normalizeJournalDate(valueOf('journal-form-exit-ts')),
+        entry_price: normalizeOptionalNumber(valueOf('journal-form-entry-price')),
+        exit_price: normalizeOptionalNumber(valueOf('journal-form-exit-price')),
+        pnl_eur: Number(valueOf('journal-form-pnl-eur') || 0),
+        pnl_pct: normalizeOptionalNumber(valueOf('journal-form-pnl-pct')),
+        size_notional_eur: normalizeOptionalNumber(valueOf('journal-form-size')),
+        confidence_before: normalizeOptionalInt(valueOf('journal-form-confidence-before')),
+        confidence_after: normalizeOptionalInt(valueOf('journal-form-confidence-after')),
+        fees_eur: Number(valueOf('journal-form-fees') || 0),
+        tags: valueOf('journal-form-tags'),
+        mistakes: valueOf('journal-form-mistakes'),
+        lesson: valueOf('journal-form-lesson'),
+        notes: valueOf('journal-form-notes'),
+      }};
+    }}
+    function normalizeOptionalNumber(value) {{
+      if (value === null || value === undefined || value === '') return null;
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? parsed : null;
+    }}
+    function normalizeOptionalInt(value) {{
+      if (value === null || value === undefined || value === '') return null;
+      const parsed = parseInt(value, 10);
+      return Number.isFinite(parsed) ? parsed : null;
+    }}
+    function normalizeJournalDate(value) {{
+      if (!value) return null;
+      const date = new Date(value);
+      return Number.isNaN(date.getTime()) ? null : date.toISOString();
+    }}
+    async function submitJournalEntry() {{
+      const statusNode = document.getElementById('journal-form-status');
+      if (statusNode) {{
+        statusNode.textContent = 'Saving journal entry...';
+        statusNode.className = 'journal-form-status';
+      }}
+      try {{
+        const response = await fetch('/api/personal-journal/append', {{
+          method: 'POST',
+          headers: {{ 'Content-Type': 'application/json' }},
+          body: JSON.stringify(journalFormPayload()),
+        }});
+        const payload = await response.json();
+        if (!response.ok || !payload.ok) {{
+          throw new Error(payload.error || `HTTP ${{response.status}}`);
+        }}
+        if (statusNode) {{
+          statusNode.textContent = `Saved: ${{payload.entry.instrument}} | ${{payload.entry.strategy_name}}`;
+          statusNode.className = 'journal-form-status good';
+        }}
+        await refreshOverview();
+      }} catch (error) {{
+        if (statusNode) {{
+          statusNode.textContent = `Journal save failed: ${{error}}`;
+          statusNode.className = 'journal-form-status bad';
+        }}
+      }}
+    }}
     dashboardState.marketFavorites = loadFavoriteSymbols();
     function bindFilterControls() {{
       if (dashboardState.bound) return;
@@ -2440,6 +2791,12 @@ def render_dashboard_app_html(overview: dict[str, Any]) -> str:
       const exportButton = document.getElementById('export-trades-button');
       if (exportButton) {{
         exportButton.addEventListener('click', () => exportFilteredTradesCsv());
+      }}
+      const journalSubmitButton = document.getElementById('journal-form-submit');
+      if (journalSubmitButton) {{
+        journalSubmitButton.addEventListener('click', () => {{
+          submitJournalEntry();
+        }});
       }}
       const clearButton = document.getElementById('clear-trade-selection-button');
       if (clearButton) {{
@@ -2712,6 +3069,28 @@ def render_dashboard_app_html(overview: dict[str, Any]) -> str:
           <span class="path">PF ${{fmtNumber(row.profit_factor, 2)}} | WR ${{fmtPercent(Number(row.win_rate || 0) * 100)}} | expectancy ${{fmtNumber(row.expectancy_eur, 2)}} EUR</span>
         </div>
       `).join('') || '<div class="list-item"><strong>No fast-research rows</strong><span>Die Fast-Trading-Lane erscheint hier, sobald die Backend-Daten bereitgestellt werden.</span></div>');
+    }}
+    function renderJournalAlignmentSection(overview) {{
+      const alignment = overview.journal_strategy_alignment || {{}};
+      const summary = alignment.summary || {{}};
+      const familyRows = alignment.family_alignment || [];
+      const assetRows = alignment.asset_alignment || [];
+      const guardrails = alignment.guardrails || [];
+      const beginnerNotes = alignment.beginner_notes || [];
+      setHTML('journal-alignment-summary-grid', [
+        ['Manual entries', fmtText(summary.manual_entries ?? 0)],
+        ['Matched families', fmtText(summary.matched_families ?? 0)],
+        ['Asset overlap', fmtText(summary.overlapping_assets ?? 0)],
+        ['Guardrails', fmtText(summary.guardrail_matches ?? 0)],
+        ['Strongest family', fmtText(summary.strongest_family)],
+        ['Recommended focus', fmtText(summary.recommended_focus)],
+      ].map(([label, value]) => `<div class="mini-metric"><div class="label">${{escapeHtml(label)}}</div><div class="value">${{escapeHtml(value)}}</div></div>`).join(''));
+      setText('journal-alignment-meta', `${{familyRows.length}} mapped families | strongest ${{fmtText(summary.strongest_family)}}`);
+      setText('journal-alignment-asset-meta', `${{assetRows.length}} manual assets tracked`);
+      setHTML('journal-alignment-family-body', familyRows.map(row => `<tr><td>${{escapeHtml(row.family)}}</td><td>${{fmtText(row.manual_trades)}}</td><td>${{fmtText(row.bot_strategies)}}</td><td>${{fmtText(row.eligible_strategies)}}</td><td>${{row.champion_present ? 'yes' : 'no'}}</td></tr>`).join('') || '<tr><td colspan="5">No family alignment data yet.</td></tr>');
+      setHTML('journal-alignment-asset-body', assetRows.map(row => `<tr><td>${{escapeHtml(row.asset)}}</td><td>${{fmtText(row.manual_trades)}}</td><td>${{row.tracked_by_bot ? 'yes' : 'no'}}</td><td>${{row.fast_lane_seen ? 'yes' : 'no'}}</td></tr>`).join('') || '<tr><td colspan="4">No asset overlap data yet.</td></tr>');
+      setHTML('journal-alignment-guardrails', guardrails.map(row => `<div class="list-item"><strong>${{escapeHtml(row.mistake)}}</strong><span>${{escapeHtml(row.guardrail)}}</span><span class="path">count ${{fmtText(row.count)}}</span></div>`).join('') || '<div class="list-item"><strong>No mapped mistakes yet</strong><span>Wenn du im Journal Fehler markierst, verknuepft das Cockpit sie hier mit Bot-Guardrails.</span></div>');
+      setHTML('journal-alignment-beginner', beginnerNotes.map(row => `<div class="list-item"><strong>${{escapeHtml(row.term || 'Hint')}}</strong><span>${{escapeHtml(row.simple || row.detail || 'n/a')}}</span></div>`).join('') || '<div class="list-item"><strong>No beginner notes yet</strong><span>Die Journal-vs-Bot-Erklaerungen erscheinen hier, sobald Daten vorliegen.</span></div>');
     }}
     function renderShadowSection(overview) {{
       const shadow = overview.shadow_portfolios || {{}};
@@ -3063,6 +3442,7 @@ def render_dashboard_app_html(overview: dict[str, Any]) -> str:
       renderPersonalJournalSection(overview);
       renderFastResearchSection(overview);
       renderStrategyLabSection(overview);
+      renderJournalAlignmentSection(overview);
       const tradeAnalytics = overview.trade_analytics || {{}};
       const tradeSummary = tradeAnalytics.summary || {{}};
       setText('equity-chart-meta', `ending equity = ${{fmtNumber(tradeSummary.ending_equity, 2)}} EUR`);

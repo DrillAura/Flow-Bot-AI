@@ -1076,6 +1076,388 @@ class FastMicroScalpStrategy:
         return StrategyEvaluation(intent=intent, snapshot=snapshot, rejection_reasons=(), checks=tuple(checks))
 
 
+class FastLiquiditySweepReclaimStrategy:
+    def __init__(
+        self,
+        config: BotConfig,
+        *,
+        strategy_id: str = "fast_liquidity_sweep_reclaim",
+        strategy_family: str = "fast_trading",
+    ) -> None:
+        self.config = config
+        self.strategy_id = strategy_id
+        self.strategy_family = strategy_family
+        self._helper = BreakoutPullbackStrategy(config)
+
+    def evaluate(self, context: MarketContext) -> DayTradeIntent | None:
+        return self.evaluate_detailed(context).intent
+
+    def evaluate_detailed(self, context: MarketContext) -> StrategyEvaluation:
+        checks: list[StrategyCheck] = []
+        rejection_reasons = self._helper._history_rejections(context, checks)
+        if rejection_reasons:
+            return StrategyEvaluation(intent=None, snapshot=None, rejection_reasons=tuple(rejection_reasons), checks=tuple(checks))
+
+        snapshot = self._helper._build_snapshot(context)
+        regime = self._helper._assess_regime(context, snapshot)
+        windows = context.analysis_windows or {}
+        micro_count = len(context.micro_samples)
+        fast_1s = windows.get("1S") or {}
+        fast_5s = windows.get("5S") or {}
+        change_1s_bps = _window_change_bps(fast_1s)
+        change_5s_bps = _window_change_bps(fast_5s)
+        range_5s_bps = _window_range_bps(fast_5s)
+        lookback = max(self.config.fast_sweep_lookback_bars, 3)
+        latest_candle = context.candles_1m[-1]
+        sweep_window = list(context.candles_1m[-3:-1])
+        sweep_candle = min(sweep_window, key=lambda candle: candle.low)
+        reference_segment = list(context.candles_1m[-(lookback + 3):-3])
+        reference_sample = reference_segment[-3:] if len(reference_segment) >= 3 else reference_segment
+        reference_low = min((candle.low for candle in reference_sample), default=sweep_candle.low)
+        ema9_1m = last_value(ema([candle.close for candle in context.candles_1m], 9))
+
+        checks.extend(
+            [
+                StrategyCheck(
+                    name="fast_micro_samples",
+                    passed=micro_count >= self.config.fast_min_micro_samples,
+                    threshold=f">= {self.config.fast_min_micro_samples}",
+                    value=micro_count,
+                    reason="fast_not_enough_micro_samples",
+                ),
+                StrategyCheck(
+                    name="fast_regime",
+                    passed=regime.label in {"bullish", "recovery"} and snapshot.adx_15m >= self.config.fast_min_adx_15m,
+                    threshold=f"bullish/recovery and ADX >= {self.config.fast_min_adx_15m:.1f}",
+                    value=f"{regime.label}/{snapshot.adx_15m:.2f}",
+                    reason="fast_regime_not_supported",
+                ),
+                StrategyCheck(
+                    name="fast_spread_bps",
+                    passed=snapshot.spread_bps <= min(self.config.max_spread_bps, self.config.fast_max_spread_bps),
+                    threshold=f"<= {min(self.config.max_spread_bps, self.config.fast_max_spread_bps):.2f} bps",
+                    value=round(snapshot.spread_bps, 4),
+                    reason="fast_spread_too_wide",
+                ),
+                StrategyCheck(
+                    name="fast_window_1s",
+                    passed=bool(fast_1s.get("available")),
+                    threshold="1S profile available",
+                    value=fast_1s.get("available"),
+                    reason="fast_1s_window_unavailable",
+                ),
+                StrategyCheck(
+                    name="fast_window_5s",
+                    passed=bool(fast_5s.get("available")),
+                    threshold="5S profile available",
+                    value=fast_5s.get("available"),
+                    reason="fast_5s_window_unavailable",
+                ),
+                StrategyCheck(
+                    name="fast_change_1s_bps",
+                    passed=change_1s_bps >= (self.config.fast_min_change_1s_bps * 0.9),
+                    threshold=f">= {(self.config.fast_min_change_1s_bps * 0.9):.2f} bps",
+                    value=round(change_1s_bps, 4),
+                    reason="fast_1s_thrust_too_low",
+                ),
+                StrategyCheck(
+                    name="fast_change_5s_bps",
+                    passed=change_5s_bps >= (self.config.fast_min_change_5s_bps * 0.9),
+                    threshold=f">= {(self.config.fast_min_change_5s_bps * 0.9):.2f} bps",
+                    value=round(change_5s_bps, 4),
+                    reason="fast_5s_thrust_too_low",
+                ),
+                StrategyCheck(
+                    name="fast_range_5s_bps",
+                    passed=0.0 < range_5s_bps <= self.config.fast_max_range_5s_bps,
+                    threshold=f"0 < range <= {self.config.fast_max_range_5s_bps:.2f} bps",
+                    value=round(range_5s_bps, 4),
+                    reason="fast_5s_range_out_of_bounds",
+                ),
+                StrategyCheck(
+                    name="fast_imbalance",
+                    passed=snapshot.imbalance_1m >= (self.config.fast_min_imbalance * 0.96),
+                    threshold=f">= {(self.config.fast_min_imbalance * 0.96):.2f}",
+                    value=round(snapshot.imbalance_1m, 4),
+                    reason="fast_imbalance_too_low",
+                ),
+                StrategyCheck(
+                    name="fast_sweep_reference",
+                    passed=bool(reference_segment),
+                    threshold=f"{lookback} prior 1m bars",
+                    value=len(reference_segment),
+                    reason="fast_sweep_reference_missing",
+                ),
+                StrategyCheck(
+                    name="fast_liquidity_sweep",
+                    passed=sweep_candle.low < reference_low,
+                    threshold="sweep candle low below prior 1m lows",
+                    value=round(sweep_candle.low - reference_low, 6),
+                    reason="fast_no_liquidity_sweep",
+                ),
+                StrategyCheck(
+                    name="fast_reclaim_close",
+                    passed=latest_candle.close >= reference_low and latest_candle.close >= sweep_candle.close,
+                    threshold="latest close reclaims prior low and sweep close",
+                    value=round(latest_candle.close, 6),
+                    reason="fast_no_sweep_reclaim",
+                ),
+                StrategyCheck(
+                    name="fast_1m_structure",
+                    passed=ema9_1m is not None and latest_candle.close >= ema9_1m and latest_candle.close >= latest_candle.open,
+                    threshold="latest 1m close above EMA9 and above open",
+                    value=round(latest_candle.close, 4),
+                    reason="fast_1m_structure_not_confirmed",
+                ),
+            ]
+        )
+        if any(not check.passed for check in checks):
+            rejection_reasons.extend(
+                check.reason
+                for check in checks
+                if not check.passed and check.reason is not None and check.reason not in rejection_reasons
+            )
+            return StrategyEvaluation(intent=None, snapshot=snapshot, rejection_reasons=tuple(rejection_reasons), checks=tuple(checks))
+
+        atr_1m = last_value(atr(context.candles_1m, 14)) or max(latest_candle.range, latest_candle.close * 0.0010)
+        entry_price = context.order_book.best_ask
+        stop_price = max(
+            sweep_candle.low - (0.15 * atr_1m),
+            entry_price * (1.0 - self.config.fast_max_stop_pct),
+        )
+        checks.append(
+            StrategyCheck(
+                name="fast_valid_stop",
+                passed=stop_price < entry_price,
+                threshold="stop_price < entry_price",
+                value=round(entry_price - stop_price, 8),
+                reason="fast_invalid_stop",
+            )
+        )
+        if stop_price >= entry_price:
+            rejection_reasons.append("fast_invalid_stop")
+            return StrategyEvaluation(intent=None, snapshot=snapshot, rejection_reasons=tuple(rejection_reasons), checks=tuple(checks))
+
+        sweep_depth_bps = max(((reference_low - sweep_candle.low) / max(entry_price, 1e-9)) * 10_000.0, 0.0)
+        reclaim_strength_bps = max(((latest_candle.close - reference_low) / max(entry_price, 1e-9)) * 10_000.0, 0.0)
+        score = min(
+            100.0,
+            40.0
+            + min(sweep_depth_bps * 0.8, 14.0)
+            + min(reclaim_strength_bps * 0.9, 12.0)
+            + min(max(change_1s_bps - 1.0, 0.0) * 4.0, 10.0)
+            + min(max(change_5s_bps - 2.0, 0.0) * 2.6, 10.0)
+            + min(max(snapshot.imbalance_1m - 1.0, 0.0) * 28.0, 14.0)
+            + max(0.0, 8.0 - snapshot.spread_bps)
+        )
+        quality = self.config.classify_quality(score)
+        intent = DayTradeIntent(
+            pair=context.symbol,
+            entry_zone=entry_price,
+            stop_price=stop_price,
+            trail_activation_r=self.config.fast_trail_activation_r,
+            max_hold_min=self.config.fast_max_hold_minutes,
+            budget_eur=0.0,
+            reason_code=f"fast_liquidity_sweep_reclaim:{sweep_depth_bps:.2f}/{reclaim_strength_bps:.2f}",
+            score=score,
+            quality=quality,
+            setup_type="fast_liquidity_sweep_reclaim",
+            regime_label="fast_trading",
+            strategy_id=self.strategy_id,
+            strategy_family=self.strategy_family,
+            break_even_trigger_r=self.config.fast_break_even_trigger_r,
+            time_decay_minutes=self.config.fast_time_decay_minutes,
+            time_decay_min_r=self.config.fast_time_decay_min_r,
+        )
+        return StrategyEvaluation(intent=intent, snapshot=snapshot, rejection_reasons=(), checks=tuple(checks))
+
+
+class FastVwapReclaimScalpStrategy:
+    def __init__(
+        self,
+        config: BotConfig,
+        *,
+        strategy_id: str = "fast_vwap_reclaim_scalp",
+        strategy_family: str = "fast_trading",
+    ) -> None:
+        self.config = config
+        self.strategy_id = strategy_id
+        self.strategy_family = strategy_family
+        self._helper = BreakoutPullbackStrategy(config)
+
+    def evaluate(self, context: MarketContext) -> DayTradeIntent | None:
+        return self.evaluate_detailed(context).intent
+
+    def evaluate_detailed(self, context: MarketContext) -> StrategyEvaluation:
+        checks: list[StrategyCheck] = []
+        rejection_reasons = self._helper._history_rejections(context, checks)
+        if rejection_reasons:
+            return StrategyEvaluation(intent=None, snapshot=None, rejection_reasons=tuple(rejection_reasons), checks=tuple(checks))
+
+        snapshot = self._helper._build_snapshot(context)
+        regime = self._helper._assess_regime(context, snapshot)
+        windows = context.analysis_windows or {}
+        micro_count = len(context.micro_samples)
+        fast_1s = windows.get("1S") or {}
+        fast_5s = windows.get("5S") or {}
+        change_1s_bps = _window_change_bps(fast_1s)
+        change_5s_bps = _window_change_bps(fast_5s)
+        range_5s_bps = _window_range_bps(fast_5s)
+        latest_candle = context.candles_1m[-1]
+        vwap_1m = rolling_vwap(context.candles_1m, 20)
+        reclaim_threshold = vwap_1m * (1.0 + (self.config.fast_vwap_reclaim_buffer_bps / 10_000.0))
+        prior_reclaim_segment = list(context.candles_1m[-4:-1])
+        volume_z_1m = last_value(rolling_zscore([candle.volume for candle in context.candles_1m], 20)) or 0.0
+
+        checks.extend(
+            [
+                StrategyCheck(
+                    name="fast_micro_samples",
+                    passed=micro_count >= self.config.fast_min_micro_samples,
+                    threshold=f">= {self.config.fast_min_micro_samples}",
+                    value=micro_count,
+                    reason="fast_not_enough_micro_samples",
+                ),
+                StrategyCheck(
+                    name="fast_regime",
+                    passed=regime.label in {"bullish", "recovery"} and snapshot.adx_15m >= self.config.fast_min_adx_15m,
+                    threshold=f"bullish/recovery and ADX >= {self.config.fast_min_adx_15m:.1f}",
+                    value=f"{regime.label}/{snapshot.adx_15m:.2f}",
+                    reason="fast_regime_not_supported",
+                ),
+                StrategyCheck(
+                    name="fast_spread_bps",
+                    passed=snapshot.spread_bps <= min(self.config.max_spread_bps, self.config.fast_max_spread_bps),
+                    threshold=f"<= {min(self.config.max_spread_bps, self.config.fast_max_spread_bps):.2f} bps",
+                    value=round(snapshot.spread_bps, 4),
+                    reason="fast_spread_too_wide",
+                ),
+                StrategyCheck(
+                    name="fast_window_1s",
+                    passed=bool(fast_1s.get("available")),
+                    threshold="1S profile available",
+                    value=fast_1s.get("available"),
+                    reason="fast_1s_window_unavailable",
+                ),
+                StrategyCheck(
+                    name="fast_window_5s",
+                    passed=bool(fast_5s.get("available")),
+                    threshold="5S profile available",
+                    value=fast_5s.get("available"),
+                    reason="fast_5s_window_unavailable",
+                ),
+                StrategyCheck(
+                    name="fast_change_1s_bps",
+                    passed=change_1s_bps >= (self.config.fast_min_change_1s_bps * 0.8),
+                    threshold=f">= {(self.config.fast_min_change_1s_bps * 0.8):.2f} bps",
+                    value=round(change_1s_bps, 4),
+                    reason="fast_1s_thrust_too_low",
+                ),
+                StrategyCheck(
+                    name="fast_change_5s_bps",
+                    passed=change_5s_bps >= (self.config.fast_min_change_5s_bps * 0.8),
+                    threshold=f">= {(self.config.fast_min_change_5s_bps * 0.8):.2f} bps",
+                    value=round(change_5s_bps, 4),
+                    reason="fast_5s_thrust_too_low",
+                ),
+                StrategyCheck(
+                    name="fast_range_5s_bps",
+                    passed=0.0 < range_5s_bps <= self.config.fast_max_range_5s_bps,
+                    threshold=f"0 < range <= {self.config.fast_max_range_5s_bps:.2f} bps",
+                    value=round(range_5s_bps, 4),
+                    reason="fast_5s_range_out_of_bounds",
+                ),
+                StrategyCheck(
+                    name="fast_imbalance",
+                    passed=snapshot.imbalance_1m >= (self.config.fast_min_imbalance * 0.94),
+                    threshold=f">= {(self.config.fast_min_imbalance * 0.94):.2f}",
+                    value=round(snapshot.imbalance_1m, 4),
+                    reason="fast_imbalance_too_low",
+                ),
+                StrategyCheck(
+                    name="fast_vwap_reclaim",
+                    passed=latest_candle.close >= reclaim_threshold,
+                    threshold=f"latest close >= VWAP + {self.config.fast_vwap_reclaim_buffer_bps:.2f} bps",
+                    value=round(latest_candle.close, 6),
+                    reason="fast_vwap_not_reclaimed",
+                ),
+                StrategyCheck(
+                    name="fast_recent_dip_below_vwap",
+                    passed=any(candle.close < vwap_1m for candle in prior_reclaim_segment),
+                    threshold="recent 1m closes dipped below VWAP before reclaim",
+                    value=round(min((candle.close for candle in prior_reclaim_segment), default=latest_candle.close), 6),
+                    reason="fast_vwap_reclaim_missing_dip",
+                ),
+                StrategyCheck(
+                    name="fast_volume_zscore_1m",
+                    passed=volume_z_1m >= self.config.fast_vwap_min_volume_zscore,
+                    threshold=f">= {self.config.fast_vwap_min_volume_zscore:.2f}",
+                    value=round(volume_z_1m, 4),
+                    reason="fast_vwap_volume_too_low",
+                ),
+            ]
+        )
+        if any(not check.passed for check in checks):
+            rejection_reasons.extend(
+                check.reason
+                for check in checks
+                if not check.passed and check.reason is not None and check.reason not in rejection_reasons
+            )
+            return StrategyEvaluation(intent=None, snapshot=snapshot, rejection_reasons=tuple(rejection_reasons), checks=tuple(checks))
+
+        atr_1m = last_value(atr(context.candles_1m, 14)) or max(latest_candle.range, latest_candle.close * 0.0010)
+        entry_price = context.order_book.best_ask
+        structure_low = min(candle.low for candle in prior_reclaim_segment) if prior_reclaim_segment else latest_candle.low
+        stop_price = max(
+            structure_low - (0.12 * atr_1m),
+            entry_price * (1.0 - self.config.fast_max_stop_pct),
+        )
+        checks.append(
+            StrategyCheck(
+                name="fast_valid_stop",
+                passed=stop_price < entry_price,
+                threshold="stop_price < entry_price",
+                value=round(entry_price - stop_price, 8),
+                reason="fast_invalid_stop",
+            )
+        )
+        if stop_price >= entry_price:
+            rejection_reasons.append("fast_invalid_stop")
+            return StrategyEvaluation(intent=None, snapshot=snapshot, rejection_reasons=tuple(rejection_reasons), checks=tuple(checks))
+
+        reclaim_bps = max(((latest_candle.close - vwap_1m) / max(entry_price, 1e-9)) * 10_000.0, 0.0)
+        score = min(
+            100.0,
+            42.0
+            + min(reclaim_bps * 1.2, 14.0)
+            + min(max(volume_z_1m - self.config.fast_vwap_min_volume_zscore, 0.0) * 10.0, 12.0)
+            + min(max(change_1s_bps - 0.8, 0.0) * 3.2, 10.0)
+            + min(max(change_5s_bps - 2.4, 0.0) * 2.3, 10.0)
+            + min(max(snapshot.imbalance_1m - 1.0, 0.0) * 26.0, 12.0)
+            + max(0.0, 8.0 - snapshot.spread_bps)
+        )
+        quality = self.config.classify_quality(score)
+        intent = DayTradeIntent(
+            pair=context.symbol,
+            entry_zone=entry_price,
+            stop_price=stop_price,
+            trail_activation_r=self.config.fast_trail_activation_r,
+            max_hold_min=self.config.fast_max_hold_minutes,
+            budget_eur=0.0,
+            reason_code=f"fast_vwap_reclaim_scalp:{reclaim_bps:.2f}/{volume_z_1m:.2f}",
+            score=score,
+            quality=quality,
+            setup_type="fast_vwap_reclaim_scalp",
+            regime_label="fast_trading",
+            strategy_id=self.strategy_id,
+            strategy_family=self.strategy_family,
+            break_even_trigger_r=self.config.fast_break_even_trigger_r,
+            time_decay_minutes=self.config.fast_time_decay_minutes,
+            time_decay_min_r=self.config.fast_time_decay_min_r,
+        )
+        return StrategyEvaluation(intent=intent, snapshot=snapshot, rejection_reasons=(), checks=tuple(checks))
+
+
 class MeanReversionVwapStrategy:
     def __init__(
         self,

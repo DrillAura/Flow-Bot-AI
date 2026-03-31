@@ -210,3 +210,95 @@ def build_fast_micro_context(symbol: str = "XBTEUR") -> MarketContext:
             "5S": {"available": True, "change_pct": 0.045, "range_pct": 0.020},
         },
     )
+
+
+def build_fast_sweep_context(symbol: str = "XBTEUR") -> MarketContext:
+    context = build_fast_micro_context(symbol)
+    candles_1m = list(context.candles_1m)
+    base_ts = candles_1m[-1].ts
+    base_price = candles_1m[-1].close
+    sweep_sequence = [
+        Candle(ts=base_ts - timedelta(minutes=5), open=base_price - 0.10, high=base_price + 0.06, low=base_price - 0.22, close=base_price - 0.02, volume=52.0),
+        Candle(ts=base_ts - timedelta(minutes=4), open=base_price - 0.08, high=base_price + 0.08, low=base_price - 0.25, close=base_price + 0.01, volume=54.0),
+        Candle(ts=base_ts - timedelta(minutes=3), open=base_price - 0.04, high=base_price + 0.10, low=base_price - 0.20, close=base_price + 0.03, volume=57.0),
+        Candle(ts=base_ts - timedelta(minutes=2), open=base_price - 0.02, high=base_price + 0.12, low=base_price - 3.20, close=base_price - 0.12, volume=70.0),
+        Candle(ts=base_ts - timedelta(minutes=1), open=base_price - 0.05, high=base_price + 0.30, low=base_price - 0.08, close=base_price + 0.18, volume=88.0),
+        Candle(ts=base_ts, open=base_price + 0.10, high=base_price + 0.44, low=base_price + 0.02, close=base_price + 0.30, volume=94.0),
+    ]
+    candles_1m[-6:] = sweep_sequence
+    order_book = OrderBookSnapshot(
+        symbol=symbol,
+        best_bid=sweep_sequence[-1].close - 0.02,
+        best_ask=sweep_sequence[-1].close + 0.02,
+        bid_volume_top5=5_900.0,
+        ask_volume_top5=4_350.0,
+    )
+    return MarketContext(
+        symbol=context.symbol,
+        candles_1m=candles_1m,
+        candles_5m=context.candles_5m,
+        candles_15m=context.candles_15m,
+        order_book=order_book,
+        atr_pct_history_15m=context.atr_pct_history_15m,
+        micro_samples=context.micro_samples,
+        analysis_windows={
+            "1S": {"available": True, "change_pct": 0.023, "range_pct": 0.010},
+            "5S": {"available": True, "change_pct": 0.049, "range_pct": 0.021},
+        },
+    )
+
+
+def build_fast_vwap_context(symbol: str = "XBTEUR") -> MarketContext:
+    context = build_fast_micro_context(symbol)
+    candles_1m = list(context.candles_1m)
+    base_ts = candles_1m[-1].ts
+    anchor = candles_1m[-24].close
+    custom_segment: list[Candle] = []
+    for index in range(20):
+        close = anchor + (0.01 * (index % 3))
+        volume = 46.0 + (index % 4)
+        custom_segment.append(
+            Candle(
+                ts=base_ts - timedelta(minutes=23 - index),
+                open=close - 0.03,
+                high=close + 0.10,
+                low=close - 0.10,
+                close=close,
+                volume=volume,
+            )
+        )
+    dip_reference = anchor + 0.02
+    custom_segment[-3] = Candle(ts=base_ts - timedelta(minutes=2), open=dip_reference + 0.03, high=dip_reference + 0.08, low=dip_reference - 0.18, close=dip_reference - 0.10, volume=54.0)
+    custom_segment[-2] = Candle(ts=base_ts - timedelta(minutes=1), open=dip_reference - 0.04, high=dip_reference + 0.05, low=dip_reference - 0.12, close=dip_reference - 0.02, volume=56.0)
+    custom_segment[-1] = Candle(ts=base_ts, open=dip_reference + 0.01, high=dip_reference + 0.36, low=dip_reference - 0.03, close=dip_reference + 0.28, volume=120.0)
+    candles_1m[-20:] = custom_segment[-20:]
+    order_book = OrderBookSnapshot(
+        symbol=symbol,
+        best_bid=custom_segment[-1].close - 0.02,
+        best_ask=custom_segment[-1].close + 0.02,
+        bid_volume_top5=5_750.0,
+        ask_volume_top5=4_500.0,
+    )
+    micro_samples = [
+        PriceSample(ts=base_ts - timedelta(seconds=7), price=custom_segment[-1].close - 0.12, bid=custom_segment[-1].close - 0.14, ask=custom_segment[-1].close - 0.10),
+        PriceSample(ts=base_ts - timedelta(seconds=6), price=custom_segment[-1].close - 0.10, bid=custom_segment[-1].close - 0.12, ask=custom_segment[-1].close - 0.08),
+        PriceSample(ts=base_ts - timedelta(seconds=5), price=custom_segment[-1].close - 0.07, bid=custom_segment[-1].close - 0.09, ask=custom_segment[-1].close - 0.05),
+        PriceSample(ts=base_ts - timedelta(seconds=4), price=custom_segment[-1].close - 0.04, bid=custom_segment[-1].close - 0.06, ask=custom_segment[-1].close - 0.02),
+        PriceSample(ts=base_ts - timedelta(seconds=3), price=custom_segment[-1].close - 0.01, bid=custom_segment[-1].close - 0.03, ask=custom_segment[-1].close + 0.01),
+        PriceSample(ts=base_ts - timedelta(seconds=2), price=custom_segment[-1].close + 0.02, bid=custom_segment[-1].close, ask=custom_segment[-1].close + 0.04),
+        PriceSample(ts=base_ts - timedelta(seconds=1), price=custom_segment[-1].close + 0.05, bid=custom_segment[-1].close + 0.03, ask=custom_segment[-1].close + 0.07),
+        PriceSample(ts=base_ts, price=custom_segment[-1].close + 0.08, bid=custom_segment[-1].close + 0.06, ask=custom_segment[-1].close + 0.10),
+    ]
+    return MarketContext(
+        symbol=context.symbol,
+        candles_1m=candles_1m,
+        candles_5m=context.candles_5m,
+        candles_15m=context.candles_15m,
+        order_book=order_book,
+        atr_pct_history_15m=context.atr_pct_history_15m,
+        micro_samples=micro_samples,
+        analysis_windows={
+            "1S": {"available": True, "change_pct": 0.019, "range_pct": 0.009},
+            "5S": {"available": True, "change_pct": 0.042, "range_pct": 0.018},
+        },
+    )

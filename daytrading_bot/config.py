@@ -258,6 +258,9 @@ class BotConfig:
     fast_min_change_5s_bps: float = 3.0
     fast_max_range_5s_bps: float = 20.0
     fast_min_adx_15m: float = 18.0
+    fast_sweep_lookback_bars: int = 6
+    fast_vwap_min_volume_zscore: float = 0.8
+    fast_vwap_reclaim_buffer_bps: float = 1.5
     fast_stop_atr_multiple: float = 0.45
     fast_max_stop_pct: float = 0.0045
     fast_break_even_trigger_r: float = 0.35

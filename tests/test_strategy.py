@@ -5,11 +5,19 @@ from daytrading_bot.config import BotConfig
 from daytrading_bot.models import MarketContext, OrderBookSnapshot
 from daytrading_bot.strategy import (
     BreakoutPullbackStrategy,
+    FastLiquiditySweepReclaimStrategy,
     FastMicroScalpStrategy,
+    FastVwapReclaimScalpStrategy,
     OpeningRangeBreakoutStrategy,
     TrendContinuationPullbackStrategy,
 )
-from tests.helpers import build_context, build_fast_micro_context, build_recovery_context
+from tests.helpers import (
+    build_context,
+    build_fast_micro_context,
+    build_fast_sweep_context,
+    build_fast_vwap_context,
+    build_recovery_context,
+)
 
 
 class StrategyTests(unittest.TestCase):
@@ -154,6 +162,28 @@ class StrategyTests(unittest.TestCase):
 
         self.assertIsNone(evaluation.intent)
         self.assertIn("fast_not_enough_micro_samples", evaluation.rejection_reasons)
+
+    def test_fast_liquidity_sweep_reclaim_strategy_produces_entry(self) -> None:
+        strategy = FastLiquiditySweepReclaimStrategy(self.config)
+        context = build_fast_sweep_context()
+
+        intent = strategy.evaluate(context)
+
+        self.assertIsNotNone(intent)
+        self.assertEqual(intent.setup_type, "fast_liquidity_sweep_reclaim")
+        self.assertEqual(intent.regime_label, "fast_trading")
+        self.assertTrue(intent.reason_code.startswith("fast_liquidity_sweep_reclaim:"))
+
+    def test_fast_vwap_reclaim_scalp_strategy_produces_entry(self) -> None:
+        strategy = FastVwapReclaimScalpStrategy(self.config)
+        context = build_fast_vwap_context()
+
+        intent = strategy.evaluate(context)
+
+        self.assertIsNotNone(intent)
+        self.assertEqual(intent.setup_type, "fast_vwap_reclaim_scalp")
+        self.assertEqual(intent.regime_label, "fast_trading")
+        self.assertTrue(intent.reason_code.startswith("fast_vwap_reclaim_scalp:"))
 
 
 if __name__ == "__main__":

@@ -174,13 +174,33 @@ def build_strategy_specs() -> list[StrategySpec]:
             },
             promotion_allowed=False,
         ),
+        StrategySpec(
+            strategy_id="fast_liquidity_sweep_reclaim",
+            label="Fast Liquidity Sweep Reclaim",
+            family="fast_trading",
+            strategy_type="fast_liquidity_sweep_reclaim",
+            description="Research-only micro lane that buys a fast reclaim after a short liquidity sweep below local 1m lows.",
+            config_overrides={},
+            promotion_allowed=False,
+        ),
+        StrategySpec(
+            strategy_id="fast_vwap_reclaim_scalp",
+            label="Fast VWAP Reclaim Scalp",
+            family="fast_trading",
+            strategy_type="fast_vwap_reclaim_scalp",
+            description="Research-only micro lane that buys a clean 1m VWAP reclaim with short-term thrust and supportive imbalance.",
+            config_overrides={},
+            promotion_allowed=False,
+        ),
     ]
 
 
 def build_strategy(strategy_spec: StrategySpec, bot_config: BotConfig):
     from .strategy import (
         BreakoutPullbackStrategy,
+        FastLiquiditySweepReclaimStrategy,
         FastMicroScalpStrategy,
+        FastVwapReclaimScalpStrategy,
         MeanReversionVwapStrategy,
         OpeningRangeBreakoutStrategy,
         TrendContinuationPullbackStrategy,
@@ -206,6 +226,18 @@ def build_strategy(strategy_spec: StrategySpec, bot_config: BotConfig):
         )
     if strategy_spec.strategy_type == "fast_micro_scalp":
         return FastMicroScalpStrategy(
+            bot_config,
+            strategy_id=strategy_spec.strategy_id,
+            strategy_family=strategy_spec.family,
+        )
+    if strategy_spec.strategy_type == "fast_liquidity_sweep_reclaim":
+        return FastLiquiditySweepReclaimStrategy(
+            bot_config,
+            strategy_id=strategy_spec.strategy_id,
+            strategy_family=strategy_spec.family,
+        )
+    if strategy_spec.strategy_type == "fast_vwap_reclaim_scalp":
+        return FastVwapReclaimScalpStrategy(
             bot_config,
             strategy_id=strategy_spec.strategy_id,
             strategy_family=strategy_spec.family,
