@@ -24,6 +24,7 @@ class SignalObservatorySummary:
     setup_breakdown: list[dict[str, Any]]
     rejection_breakdown: list[dict[str, Any]]
     decision_breakdown: list[dict[str, Any]]
+    analysis_window_coverage: list[dict[str, Any]]
 
 
 class SignalObservatory:
@@ -80,6 +81,7 @@ class SignalObservatory:
                     if snapshot is not None
                     else None
                 ),
+                "analysis_windows": context.analysis_windows or {},
             }
             self.telemetry.log("signal_observed", payload, event_ts=moment)
 
@@ -95,6 +97,7 @@ def run_signal_observatory_report(telemetry_path: Path) -> SignalObservatorySumm
     setup_counter: Counter[str] = Counter()
     rejection_counter: Counter[str] = Counter()
     decision_counter: Counter[str] = Counter()
+    window_counter: Counter[str] = Counter()
     tradable = 0
 
     for event in observed:
@@ -106,6 +109,9 @@ def run_signal_observatory_report(telemetry_path: Path) -> SignalObservatorySumm
             setup_counter[str(payload.get("setup_type") or "unknown")] += 1
         for reason in payload.get("rejection_reasons", []) or []:
             rejection_counter[str(reason)] += 1
+        for label, window in (payload.get("analysis_windows") or {}).items():
+            if (window or {}).get("available"):
+                window_counter[str(label)] += 1
 
     for event in decision_rejections:
         payload = event.get("payload", {}) or {}
@@ -123,6 +129,7 @@ def run_signal_observatory_report(telemetry_path: Path) -> SignalObservatorySumm
         setup_breakdown=_counter_rows(setup_counter),
         rejection_breakdown=_counter_rows(rejection_counter),
         decision_breakdown=_counter_rows(decision_counter),
+        analysis_window_coverage=_counter_rows(window_counter),
     )
 
 

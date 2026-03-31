@@ -265,6 +265,7 @@ class BotConfig:
     quote_fee_rate: float = 0.0040
     pairs: tuple[PairConfig, ...] = DEFAULT_PAIRS
     shadow_portfolio_sizes_eur: tuple[float, ...] = (50.0, 100.0, 250.0, 500.0, 1000.0)
+    shadow_portfolio_behaviors: tuple[str, ...] = ("defensive", "balanced", "growth", "aggressive", "fast_research")
     telemetry_path: str = "logs/trading_events.jsonl"
     strategy_lab_state_path: str = "logs/strategy_lab_state.json"
     active_strategy_id: str = "champion_breakout"

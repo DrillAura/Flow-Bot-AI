@@ -8,13 +8,17 @@ from typing import Any
 from urllib import parse, request
 
 from .indicators import atr
-from .models import Candle, MarketContext, OrderBookSnapshot
+from .models import Candle, MarketContext, OrderBookSnapshot, PriceSample
 from .storage import load_csv_candles, merge_candles, write_csv_candles
 
 
-TIMEFRAME_WINDOWS: tuple[tuple[str, int | None], ...] = (
+TIMEFRAME_WINDOWS: tuple[tuple[str, float | None], ...] = (
+    ("1S", 1.0 / 60.0),
+    ("5S", 5.0 / 60.0),
     ("1H", 60),
+    ("5H", 5 * 60),
     ("9H", 9 * 60),
+    ("12H", 12 * 60),
     ("1D", 24 * 60),
     ("7D", 7 * 24 * 60),
     ("30D", 30 * 24 * 60),
@@ -152,6 +156,7 @@ class KrakenPublicClient:
         *,
         live_price: float | None = None,
         live_ts: datetime | None = None,
+        micro_samples: list[PriceSample] | None = None,
     ) -> dict[str, dict[str, Any]]:
         if not candles_1m:
             return {}
@@ -161,6 +166,17 @@ class KrakenPublicClient:
         now = live_ts or datetime.now(timezone.utc)
         profiles: dict[str, dict[str, Any]] = {}
         for label, minutes in TIMEFRAME_WINDOWS:
+            if minutes is not None and minutes < 1.0 and micro_samples:
+                profile = _profile_from_price_samples(
+                    label=label,
+                    minutes=minutes,
+                    samples=micro_samples,
+                    fallback_price=anchor_price,
+                    now=now,
+                )
+                if profile is not None:
+                    profiles[label] = profile
+                    continue
             if minutes is None:
                 window = list(candles_1m)
                 coverage_pct = 1.0
@@ -298,6 +314,7 @@ class KrakenMarketStore:
         self.ws_to_symbol = {metadata.wsname: metadata.altname for metadata in pair_metadata_by_symbol.values()}
         self.books = {symbol: KrakenOrderBook(symbol=symbol) for symbol in pair_metadata_by_symbol.keys()}
         self.candles: dict[str, dict[int, list[Candle]]] = {symbol: {1: [], 5: [], 15: []} for symbol in pair_metadata_by_symbol.keys()}
+        self.micro_samples: dict[str, list[PriceSample]] = {symbol: [] for symbol in pair_metadata_by_symbol.keys()}
 
     def websocket_symbols(self) -> list[str]:
         return [metadata.wsname for metadata in self.pair_metadata_by_symbol.values()]
@@ -335,6 +352,13 @@ class KrakenMarketStore:
                     "timestamp": payload.get("timestamp"),
                 }
             )
+            self._record_micro_sample(
+                symbol,
+                price=float(payload.get("last", payload.get("bid", payload.get("ask", 0.0))) or 0.0),
+                bid=float(payload.get("bid", 0.0) or 0.0),
+                ask=float(payload.get("ask", 0.0) or 0.0),
+                timestamp=payload.get("timestamp"),
+            )
             updated.add(symbol)
         return updated
 
@@ -349,6 +373,13 @@ class KrakenMarketStore:
                 continue
             atr_values = atr(candles_15m, 14)
             atr_history = [100.0 * value / candle.close for value, candle in zip(atr_values, candles_15m) if value is not None and candle.close > 0]
+            micro_samples = list(self.micro_samples[symbol][-900:])
+            analysis_windows = KrakenPublicClient.build_timeframe_profiles(
+                candles_1m[-500:],
+                live_price=(micro_samples[-1].price if micro_samples else None),
+                live_ts=(micro_samples[-1].ts if micro_samples else None),
+                micro_samples=micro_samples,
+            )
             contexts.append(
                 MarketContext(
                     symbol=symbol,
@@ -357,6 +388,8 @@ class KrakenMarketStore:
                     candles_15m=candles_15m[-120:],
                     order_book=book,
                     atr_pct_history_15m=atr_history[-200:],
+                    micro_samples=micro_samples,
+                    analysis_windows=analysis_windows,
                 )
             )
         return contexts
@@ -374,6 +407,28 @@ class KrakenMarketStore:
         if ws_symbol not in self.ws_to_symbol:
             raise KeyError(f"Unsupported websocket symbol: {ws_symbol}")
         return self.ws_to_symbol[ws_symbol]
+
+    def _record_micro_sample(
+        self,
+        symbol: str,
+        *,
+        price: float,
+        bid: float,
+        ask: float,
+        timestamp: str | None,
+        maxlen: int = 7200,
+    ) -> None:
+        if price <= 0:
+            return
+        sample_ts = parse_rfc3339(timestamp) if timestamp else datetime.now(timezone.utc)
+        bucket = self.micro_samples[symbol]
+        sample = PriceSample(ts=sample_ts, price=price, bid=bid or None, ask=ask or None)
+        if bucket and bucket[-1].ts == sample.ts:
+            bucket[-1] = sample
+        else:
+            bucket.append(sample)
+        if len(bucket) > maxlen:
+            del bucket[:-maxlen]
 
 
 def parse_rfc3339(value: str) -> datetime:
@@ -397,6 +452,51 @@ def ws_ohlc_to_candle(payload: dict[str, Any]) -> Candle:
         close=float(payload["close"]),
         volume=float(payload["volume"]),
     )
+
+
+def _profile_from_price_samples(
+    *,
+    label: str,
+    minutes: float,
+    samples: list[PriceSample],
+    fallback_price: float,
+    now: datetime,
+) -> dict[str, Any] | None:
+    if not samples:
+        return None
+    seconds = max(minutes * 60.0, 1.0)
+    cutoff = now.astimezone(timezone.utc) - timedelta(seconds=seconds)
+    window = [sample for sample in samples if sample.ts >= cutoff]
+    if not window:
+        window = [samples[-1]]
+    available_minutes = max((window[-1].ts - window[0].ts).total_seconds() / 60.0, 0.0)
+    coverage_pct = min((available_minutes * 60.0) / seconds, 1.0) if seconds > 0 else 1.0
+    open_price = window[0].price
+    close_price = window[-1].price or fallback_price
+    high = max(sample.price for sample in window)
+    low = min(sample.price for sample in window)
+    change_pct = ((close_price - open_price) / open_price * 100.0) if open_price > 0 else None
+    range_pct = ((high - low) / close_price * 100.0) if close_price > 0 else None
+    trend_per_hour = (change_pct / max(available_minutes / 60.0, 1e-9)) if change_pct is not None else None
+    return {
+        "label": label,
+        "minutes": minutes,
+        "available_minutes": round(available_minutes, 4),
+        "coverage_pct": round(coverage_pct, 4),
+        "open": open_price,
+        "high": high,
+        "low": low,
+        "close": close_price,
+        "change_pct": change_pct,
+        "range_pct": range_pct,
+        "volume": None,
+        "first_ts": window[0].ts.isoformat(),
+        "last_ts": window[-1].ts.isoformat(),
+        "freshness_seconds": max((now.astimezone(timezone.utc) - window[-1].ts.astimezone(timezone.utc)).total_seconds(), 0.0),
+        "trend_per_hour": trend_per_hour,
+        "series": _compress_series([sample.price for sample in window], target_points=48),
+        "available": coverage_pct >= 0.70,
+    }
 
 
 def _compress_series(values: list[float], target_points: int = 48) -> list[float]:

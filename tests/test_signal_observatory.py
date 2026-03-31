@@ -28,7 +28,8 @@ class SignalObservatoryTests(unittest.TestCase):
         event_types = [event["event_type"] for event in telemetry.events]
         self.assertIn("signal_observed", event_types)
         self.assertIn("entry_sent", event_types)
-        self.assertEqual(event_types.count("shadow_entry_sent"), len(engine.bot_config.shadow_portfolio_sizes_eur))
+        expected_shadow_lanes = sum(1 for runner in engine.shadow_lab.runners if "XBTEUR" in runner["spec"].allowed_symbols)
+        self.assertEqual(event_types.count("shadow_entry_sent"), expected_shadow_lanes)
 
     def test_run_signal_observatory_report_summarizes_events(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -75,6 +76,7 @@ class SignalObservatoryTests(unittest.TestCase):
         self.assertIn("recent_shock_candle", rejection_labels)
         decision_labels = {row["label"] for row in report.decision_breakdown}
         self.assertIn("daily_loss_limit", decision_labels)
+        self.assertIsInstance(report.analysis_window_coverage, list)
 
 
 if __name__ == "__main__":

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from typing import Sequence
+from typing import Any, Sequence
 
 
 @dataclass(frozen=True)
@@ -17,6 +17,14 @@ class Candle:
     @property
     def range(self) -> float:
         return self.high - self.low
+
+
+@dataclass(frozen=True)
+class PriceSample:
+    ts: datetime
+    price: float
+    bid: float | None = None
+    ask: float | None = None
 
 
 @dataclass(frozen=True)
@@ -52,6 +60,8 @@ class MarketContext:
     candles_15m: Sequence[Candle]
     order_book: OrderBookSnapshot
     atr_pct_history_15m: Sequence[float]
+    micro_samples: Sequence[PriceSample] = ()
+    analysis_windows: dict[str, dict[str, Any]] | None = None
 
 
 @dataclass(frozen=True)

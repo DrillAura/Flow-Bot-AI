@@ -5,6 +5,7 @@ import tempfile
 from unittest.mock import patch
 
 from daytrading_bot.kraken import KrakenMarketStore, KrakenOrderBook, KrakenPairMetadata, KrakenPublicClient, ws_ohlc_to_candle
+from daytrading_bot.models import PriceSample
 from daytrading_bot.storage import load_csv_candles
 from tests.helpers import build_context
 
@@ -66,6 +67,29 @@ class KrakenTests(unittest.TestCase):
         contexts = store.build_contexts()
         self.assertEqual(len(contexts), 1)
         self.assertEqual(contexts[0].symbol, "XBTEUR")
+        self.assertIn("5H", contexts[0].analysis_windows or {})
+
+    def test_timeframe_profiles_include_micro_and_macro_windows(self) -> None:
+        context = build_context()
+        end_ts = context.candles_1m[-1].ts
+        micro_samples = [
+            PriceSample(ts=end_ts.replace(second=55, microsecond=0), price=context.candles_1m[-1].close * 0.9995),
+            PriceSample(ts=end_ts.replace(second=58, microsecond=0), price=context.candles_1m[-1].close * 1.0005),
+            PriceSample(ts=end_ts.replace(second=59, microsecond=0), price=context.candles_1m[-1].close * 1.0010),
+        ]
+        profiles = KrakenPublicClient.build_timeframe_profiles(
+            list(context.candles_1m),
+            live_price=context.candles_1m[-1].close,
+            live_ts=end_ts,
+            micro_samples=micro_samples,
+        )
+
+        self.assertIn("1S", profiles)
+        self.assertIn("5S", profiles)
+        self.assertIn("5H", profiles)
+        self.assertIn("12H", profiles)
+        self.assertIsNotNone(profiles["1S"]["series"])
+        self.assertGreaterEqual(len(profiles["5S"]["series"]), 1)
 
     def test_ws_ohlc_to_candle(self) -> None:
         candle = ws_ohlc_to_candle(

@@ -323,8 +323,17 @@ The dashboard also exposes the research layer:
 
 - Signal Observatory summaries from live-paper scans
 - Shadow Portfolio comparisons for `50 / 100 / 250 / 500 / 1000 EUR`
+- behavior-based shadow lanes:
+  - `defensive`
+  - `balanced`
+  - `growth`
+  - `aggressive`
+  - `fast_research`
 - filters for individual shadow portfolios and regime rows
 - clickable chart markers, journal drilldown, and CSV export
+- market timeframe explorer with:
+  - micro windows `1S`, `5S`
+  - macro windows `1H`, `5H`, `9H`, `12H`, `1D`, `7D`, `30D`, `60D`, `90D`, `365D`, `MAX`
 
 On Windows systems that block self-built unsigned executables, the recommended operator path is a desktop shortcut that launches the hidden PowerShell desktop launcher and then opens the browser. This preserves the same double-click workflow without changing the runtime itself.
 

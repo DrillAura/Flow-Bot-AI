@@ -16,6 +16,7 @@ from typing import Any
 from .config import BotConfig
 from .dashboard import load_supervisor_state_payload
 from .kraken import KrakenPublicClient, TIMEFRAME_WINDOWS
+from .models import PriceSample
 from .reporting import run_forward_test_report
 from .shadow_portfolios import run_shadow_portfolio_report
 from .signal_observatory import run_signal_observatory_report
@@ -28,6 +29,7 @@ _TICKER_CACHE: dict[str, Any] = {
     "captured_at": 0.0,
     "symbols": tuple(),
     "quotes": {},
+    "history": {},
 }
 
 
@@ -79,6 +81,7 @@ def load_live_ticker_snapshots(symbols: list[str], ttl_seconds: float = 10.0) ->
 
     client = KrakenPublicClient()
     quotes: dict[str, dict[str, float]] = {}
+    captured_at_iso = datetime.now(timezone.utc).isoformat()
     for symbol in symbols:
         try:
             quotes[symbol] = client.fetch_ticker(symbol)
@@ -89,7 +92,45 @@ def load_live_ticker_snapshots(symbols: list[str], ttl_seconds: float = 10.0) ->
         _TICKER_CACHE["captured_at"] = now
         _TICKER_CACHE["symbols"] = symbol_key
         _TICKER_CACHE["quotes"] = dict(quotes)
+        history = _TICKER_CACHE.setdefault("history", {})
+        for symbol, quote in quotes.items():
+            bucket = history.setdefault(symbol, [])
+            bucket.append(
+                {
+                    "ts": captured_at_iso,
+                    "price": float(quote.get("last") or 0.0),
+                    "bid": float(quote.get("bid") or 0.0),
+                    "ask": float(quote.get("ask") or 0.0),
+                }
+            )
+            if len(bucket) > 7200:
+                del bucket[:-7200]
     return quotes
+
+
+def load_live_ticker_history(symbol: str) -> list[PriceSample]:
+    with _TICKER_CACHE_LOCK:
+        rows = list((_TICKER_CACHE.get("history") or {}).get(symbol, []))
+    samples: list[PriceSample] = []
+    for row in rows:
+        raw_ts = row.get("ts")
+        if not raw_ts:
+            continue
+        try:
+            ts = datetime.fromisoformat(str(raw_ts).replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        samples.append(
+            PriceSample(
+                ts=ts,
+                price=float(row.get("price") or 0.0),
+                bid=float(row.get("bid") or 0.0) or None,
+                ask=float(row.get("ask") or 0.0) or None,
+            )
+        )
+    return samples
 
 
 def _compress_series(values: list[float], target_points: int = 36) -> list[float]:
@@ -196,9 +237,12 @@ def build_market_overview(bot_config: BotConfig, data_dir: Path) -> dict[str, An
     for card in pair_cards:
         candles_1m = load_interval_candles(data_dir, card["symbol"], 1)
         live_quote = live_quotes.get(card["symbol"])
+        micro_samples = load_live_ticker_history(card["symbol"])
         profiles = KrakenPublicClient.build_timeframe_profiles(
             candles_1m,
             live_price=live_quote.get("last") if live_quote else None,
+            live_ts=micro_samples[-1].ts if micro_samples else None,
+            micro_samples=micro_samples,
         )
         card["timeframe_profiles"] = profiles
         card["window_badges"] = [
@@ -1533,13 +1577,14 @@ def render_dashboard_app_html(overview: dict[str, Any]) -> str:
         </div>
         <div class="filter-row">
           <div class="filter-control"><label for="shadow-filter-portfolio">Shadow Portfolio</label><select id="shadow-filter-portfolio"></select></div>
+          <div class="filter-control"><label for="shadow-filter-behavior">Behavior</label><select id="shadow-filter-behavior"></select></div>
           <div class="filter-control"><label for="shadow-filter-regime">Regime</label><select id="shadow-filter-regime"></select></div>
         </div>
         <div class="portfolio-grid" id="shadow-portfolio-grid"></div>
         <div style="height:12px"></div>
         <div class="chart-shell">
           <div class="chart"><div class="chart-caption"><span>Shadow equity curves</span><span id="shadow-equity-meta">n/a</span></div><div id="shadow-equity-chart"></div></div>
-          <div class="chart"><div class="chart-caption"><span>Regime and setup comparison</span><span id="shadow-regime-meta">n/a</span></div><table class="comparison-table"><thead><tr><th>Portfolio</th><th>Regime</th><th>Net PnL</th><th>Trades</th><th>Win Rate</th></tr></thead><tbody id="shadow-regime-body"></tbody></table><div style="height:12px"></div><table class="comparison-table"><thead><tr><th>Portfolio</th><th>Setup</th><th>Net PnL</th><th>Trades</th><th>Win Rate</th></tr></thead><tbody id="shadow-setup-body"></tbody></table></div>
+          <div class="chart"><div class="chart-caption"><span>Regime and setup comparison</span><span id="shadow-regime-meta">n/a</span></div><table class="comparison-table"><thead><tr><th>Behavior</th><th>Net PnL</th><th>Trades</th><th>Win Rate</th><th>Avg End Eq</th></tr></thead><tbody id="shadow-behavior-body"></tbody></table><div style="height:12px"></div><table class="comparison-table"><thead><tr><th>Portfolio</th><th>Regime</th><th>Net PnL</th><th>Trades</th><th>Win Rate</th></tr></thead><tbody id="shadow-regime-body"></tbody></table><div style="height:12px"></div><table class="comparison-table"><thead><tr><th>Portfolio</th><th>Setup</th><th>Net PnL</th><th>Trades</th><th>Win Rate</th></tr></thead><tbody id="shadow-setup-body"></tbody></table></div>
         </div>
       </section>
     </section>
@@ -1676,6 +1721,7 @@ def render_dashboard_app_html(overview: dict[str, Any]) -> str:
         limit: '12',
         range: '7d',
         shadowPortfolio: 'all',
+        shadowBehavior: 'all',
         shadowRegime: 'all',
         marketSymbol: 'all',
         marketTimeframe: '1D',
@@ -2092,6 +2138,7 @@ def render_dashboard_app_html(overview: dict[str, Any]) -> str:
       }});
       [
         ['shadow-filter-portfolio', 'shadowPortfolio'],
+        ['shadow-filter-behavior', 'shadowBehavior'],
         ['shadow-filter-regime', 'shadowRegime'],
       ].forEach(([id, key]) => {{
         const node = document.getElementById(id);
@@ -2322,17 +2369,22 @@ def render_dashboard_app_html(overview: dict[str, Any]) -> str:
     function filteredShadowData(shadow) {{
       const filterOptions = shadow.filter_options || {{}};
       const activePortfolio = dashboardState.filters.shadowPortfolio || 'all';
+      const activeBehavior = dashboardState.filters.shadowBehavior || 'all';
       const activeRegime = dashboardState.filters.shadowRegime || 'all';
-      const portfolios = (shadow.portfolios || []).filter(row => activePortfolio === 'all' || row.name === activePortfolio);
-      const equityCurves = (shadow.equity_curves || []).filter(row => activePortfolio === 'all' || row.portfolio === activePortfolio);
-      const regimeRows = (shadow.regime_comparison || []).filter(row => (activePortfolio === 'all' || row.portfolio === activePortfolio) && (activeRegime === 'all' || row.regime_label === activeRegime));
-      const setupRows = (shadow.setup_comparison || []).filter(row => activePortfolio === 'all' || row.portfolio === activePortfolio);
+      const portfolios = (shadow.portfolios || []).filter(row => (activePortfolio === 'all' || row.name === activePortfolio) && (activeBehavior === 'all' || row.behavior_profile === activeBehavior));
+      const visibleNames = new Set(portfolios.map(row => row.name));
+      const equityCurves = (shadow.equity_curves || []).filter(row => visibleNames.has(row.portfolio));
+      const regimeRows = (shadow.regime_comparison || []).filter(row => visibleNames.has(row.portfolio) && (activeRegime === 'all' || row.regime_label === activeRegime));
+      const setupRows = (shadow.setup_comparison || []).filter(row => visibleNames.has(row.portfolio));
+      const behaviorRows = (shadow.behavior_comparison || []).filter(row => activeBehavior === 'all' || row.behavior_profile === activeBehavior);
       return {{
         filterOptions,
         activePortfolio,
+        activeBehavior,
         activeRegime,
         portfolios,
         equityCurves,
+        behaviorRows,
         regimeRows,
         setupRows,
       }};
@@ -2341,13 +2393,15 @@ def render_dashboard_app_html(overview: dict[str, Any]) -> str:
       const shadow = overview.shadow_portfolios || {{}};
       const shadowView = filteredShadowData(shadow);
       setSelectOptions('shadow-filter-portfolio', shadowView.filterOptions.portfolios || [], shadowView.activePortfolio, 'All portfolios');
+      setSelectOptions('shadow-filter-behavior', shadowView.filterOptions.behaviors || [], shadowView.activeBehavior, 'All behaviors');
       setSelectOptions('shadow-filter-regime', shadowView.filterOptions.regimes || [], shadowView.activeRegime, 'All regimes');
-      setHTML('shadow-portfolio-grid', shadowView.portfolios.map(row => `<div class="mini-metric"><div class="label">${{escapeHtml(row.name)}}</div><div class="value">${{fmtNumber(row.ending_equity, 2)}} EUR</div><div class="neutral">net ${{fmtNumber(row.net_pnl_eur, 2)}} | wr ${{fmtPercent(Number(row.win_rate || 0) * 100)}} | dd ${{fmtPercent(Number(row.max_drawdown_pct || 0) * 100)}}</div></div>`).join('') || '<div class="list-item"><strong>No shadow data</strong><span>Die Shadow-Portfolios haben fuer diese Filter noch keine Test-Lane-Daten gesammelt.</span></div>');
+      setHTML('shadow-portfolio-grid', shadowView.portfolios.map(row => `<div class="mini-metric"><div class="label">${{escapeHtml(row.name)}}</div><div class="value">${{fmtNumber(row.ending_equity, 2)}} EUR</div><div class="neutral">${{escapeHtml(row.behavior_profile)}} | scope ${{escapeHtml(row.pair_scope)}} | net ${{fmtNumber(row.net_pnl_eur, 2)}} | wr ${{fmtPercent(Number(row.win_rate || 0) * 100)}} | dd ${{fmtPercent(Number(row.max_drawdown_pct || 0) * 100)}}</div></div>`).join('') || '<div class="list-item"><strong>No shadow data</strong><span>Die Shadow-Portfolios haben fuer diese Filter noch keine Test-Lane-Daten gesammelt.</span></div>');
       setHTML('shadow-equity-chart', multiSeriesLineSvg(shadowView.equityCurves || []));
+      setHTML('shadow-behavior-body', (shadowView.behaviorRows || []).slice(0, 12).map(row => `<tr><td>${{escapeHtml(row.behavior_profile)}}</td><td>${{fmtNumber(row.net_pnl_eur, 2)}} EUR</td><td>${{fmtText(row.trades)}}</td><td>${{fmtPercent(Number(row.win_rate || 0) * 100)}}</td><td>${{fmtNumber(row.average_ending_equity, 2)}} EUR</td></tr>`).join('') || '<tr><td colspan="5">No behavior comparison data for this filter.</td></tr>');
       setHTML('shadow-regime-body', (shadowView.regimeRows || []).slice(0, 12).map(row => `<tr><td>${{escapeHtml(row.portfolio)}}</td><td>${{escapeHtml(row.regime_label)}}</td><td>${{fmtNumber(row.net_pnl_eur, 2)}} EUR</td><td>${{fmtText(row.trades)}}</td><td>${{fmtPercent(Number(row.win_rate || 0) * 100)}}</td></tr>`).join('') || '<tr><td colspan="5">No regime comparison data for this filter.</td></tr>');
       setHTML('shadow-setup-body', (shadowView.setupRows || []).slice(0, 12).map(row => `<tr><td>${{escapeHtml(row.portfolio)}}</td><td>${{escapeHtml(row.setup_type)}}</td><td>${{fmtNumber(row.net_pnl_eur, 2)}} EUR</td><td>${{fmtText(row.trades)}}</td><td>${{fmtPercent(Number(row.win_rate || 0) * 100)}}</td></tr>`).join('') || '<tr><td colspan="5">No setup comparison data for this filter.</td></tr>');
-      setText('shadow-equity-meta', `${{shadowView.portfolios.length}} portfolios | regime filter ${{shadowView.activeRegime}}`);
-      setText('shadow-regime-meta', `${{shadowView.regimeRows.length}} regime rows | ${{shadowView.setupRows.length}} setup rows`);
+      setText('shadow-equity-meta', `${{shadowView.portfolios.length}} portfolios | behavior filter ${{shadowView.activeBehavior}} | regime filter ${{shadowView.activeRegime}}`);
+      setText('shadow-regime-meta', `${{shadowView.behaviorRows.length}} behavior rows | ${{shadowView.regimeRows.length}} regime rows | ${{shadowView.setupRows.length}} setup rows`);
     }}
     function selectedMarketState(overview) {{
       const market = overview.market || {{}};
@@ -2680,7 +2734,7 @@ def render_dashboard_app_html(overview: dict[str, Any]) -> str:
       setHTML('signal-rejection-chart', labeledBarChartSvg(observatory.rejection_breakdown || [], 'rgba(255,109,109,0.88)'));
       setHTML('signal-regime-chart', labeledBarChartSvg(observatory.regime_breakdown || [], 'rgba(56,211,159,0.88)'));
       setText('signal-funnel-meta', `${{observedSignals}} observed | tradable ${{tradableSignals}} | setup rows ${{(observatory.setup_breakdown || []).length}}`);
-      setText('signal-rejection-meta', `${{decisionRejections}} decision rejects | ${{(observatory.rejection_breakdown || []).length}} rejection buckets`);
+      setText('signal-rejection-meta', `${{decisionRejections}} decision rejects | ${{(observatory.rejection_breakdown || []).length}} rejection buckets | ${{(observatory.analysis_window_coverage || []).length}} active windows`);
       renderShadowSection(overview);
       renderStrategyLabSection(overview);
       const tradeAnalytics = overview.trade_analytics || {{}};
