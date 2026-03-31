@@ -5,10 +5,11 @@ from daytrading_bot.config import BotConfig
 from daytrading_bot.models import MarketContext, OrderBookSnapshot
 from daytrading_bot.strategy import (
     BreakoutPullbackStrategy,
+    FastMicroScalpStrategy,
     OpeningRangeBreakoutStrategy,
     TrendContinuationPullbackStrategy,
 )
-from tests.helpers import build_context, build_recovery_context
+from tests.helpers import build_context, build_fast_micro_context, build_recovery_context
 
 
 class StrategyTests(unittest.TestCase):
@@ -132,6 +133,27 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(intent.regime_label, "trend_continuation")
         self.assertLess(intent.stop_price, intent.entry_zone)
         self.assertTrue(intent.reason_code.startswith("trend_continuation_pullback:"))
+
+    def test_fast_micro_scalp_strategy_produces_entry_when_microstructure_aligns(self) -> None:
+        strategy = FastMicroScalpStrategy(self.config)
+        context = build_fast_micro_context()
+
+        intent = strategy.evaluate(context)
+
+        self.assertIsNotNone(intent)
+        self.assertEqual(intent.setup_type, "fast_micro_scalp")
+        self.assertEqual(intent.regime_label, "fast_trading")
+        self.assertLess(intent.stop_price, intent.entry_zone)
+        self.assertTrue(intent.reason_code.startswith("fast_micro_scalp:"))
+
+    def test_fast_micro_scalp_strategy_rejects_without_micro_windows(self) -> None:
+        strategy = FastMicroScalpStrategy(self.config)
+        context = build_context()
+
+        evaluation = strategy.evaluate_detailed(context)
+
+        self.assertIsNone(evaluation.intent)
+        self.assertIn("fast_not_enough_micro_samples", evaluation.rejection_reasons)
 
 
 if __name__ == "__main__":

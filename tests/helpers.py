@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 from daytrading_bot.config import BotConfig
 from daytrading_bot.indicators import atr, last_value
-from daytrading_bot.models import Candle, MarketContext, OrderBookSnapshot
+from daytrading_bot.models import Candle, MarketContext, OrderBookSnapshot, PriceSample
 
 
 def make_candle(ts: datetime, close: float, volume: float = 100.0, high_offset: float = 0.35, low_offset: float = 0.25) -> Candle:
@@ -181,3 +181,32 @@ def build_default_universe_contexts(bot_config: BotConfig | None = None) -> dict
         builder = builders[index % len(builders)]
         contexts[pair.symbol] = builder(pair.symbol)
     return contexts
+
+
+def build_fast_micro_context(symbol: str = "XBTEUR") -> MarketContext:
+    context = build_context(symbol)
+    base_ts = context.candles_1m[-1].ts
+    latest = context.candles_1m[-1].close
+    micro_samples = [
+        PriceSample(ts=base_ts - timedelta(seconds=7), price=latest - 0.16, bid=latest - 0.18, ask=latest - 0.14),
+        PriceSample(ts=base_ts - timedelta(seconds=6), price=latest - 0.13, bid=latest - 0.15, ask=latest - 0.11),
+        PriceSample(ts=base_ts - timedelta(seconds=5), price=latest - 0.10, bid=latest - 0.12, ask=latest - 0.08),
+        PriceSample(ts=base_ts - timedelta(seconds=4), price=latest - 0.07, bid=latest - 0.09, ask=latest - 0.05),
+        PriceSample(ts=base_ts - timedelta(seconds=3), price=latest - 0.04, bid=latest - 0.06, ask=latest - 0.02),
+        PriceSample(ts=base_ts - timedelta(seconds=2), price=latest + 0.01, bid=latest - 0.01, ask=latest + 0.03),
+        PriceSample(ts=base_ts - timedelta(seconds=1), price=latest + 0.05, bid=latest + 0.03, ask=latest + 0.07),
+        PriceSample(ts=base_ts, price=latest + 0.08, bid=latest + 0.06, ask=latest + 0.10),
+    ]
+    return MarketContext(
+        symbol=context.symbol,
+        candles_1m=context.candles_1m,
+        candles_5m=context.candles_5m,
+        candles_15m=context.candles_15m,
+        order_book=context.order_book,
+        atr_pct_history_15m=context.atr_pct_history_15m,
+        micro_samples=micro_samples,
+        analysis_windows={
+            "1S": {"available": True, "change_pct": 0.020, "range_pct": 0.010},
+            "5S": {"available": True, "change_pct": 0.045, "range_pct": 0.020},
+        },
+    )

@@ -13,9 +13,11 @@ from typing import Any, Callable
 
 from .config import BotConfig, ThreeCommasConfig
 from .dashboard import write_supervisor_dashboard
+from .fast_research_lab import build_fast_research_lab_payload
 from .history import history_bounds, load_local_histories
 from .kraken import KrakenPublicClient
 from .live import LiveScanReport, run_live_scanner
+from .personal_journal import build_personal_journal_payload, run_personal_journal_report
 from .reporting import ForwardTestReport, run_forward_test_report
 from .research import (
     CalibrationObjective,
@@ -176,6 +178,8 @@ class PaperForwardSupervisorReport:
     launch_report: PaperForwardLaunchReport | None
     research_scan: SupervisorResearchScanReport | None
     strategy_lab: dict[str, Any] | None
+    personal_journal: dict[str, Any] | None
+    fast_research_lab: dict[str, Any] | None
 
 
 @dataclass(frozen=True)
@@ -203,6 +207,8 @@ class SupervisorMonitorReport:
     dashboard_path: str | None
     research_scan: SupervisorResearchScanReport | None
     strategy_lab: dict[str, Any] | None
+    personal_journal: dict[str, Any] | None
+    fast_research_lab: dict[str, Any] | None
     supervisor: RuntimeProcessStatus | None
     paper_forward: RuntimeProcessStatus | None
 
@@ -793,6 +799,8 @@ def run_monitor_supervisor(state_path: Path) -> SupervisorMonitorReport:
             dashboard_path=None,
             research_scan=None,
             strategy_lab=None,
+            personal_journal=None,
+            fast_research_lab=None,
             supervisor=None,
             paper_forward=None,
         )
@@ -823,6 +831,8 @@ def run_monitor_supervisor(state_path: Path) -> SupervisorMonitorReport:
     daily_summary = _deserialize_daily_summary(payload.get("daily_summary"))
     research_scan = _deserialize_research_scan(payload.get("research_scan"))
     strategy_lab = payload.get("strategy_lab")
+    personal_journal = payload.get("personal_journal")
+    fast_research_lab = payload.get("fast_research_lab")
     last_prepare = payload.get("last_prepare_report") or {}
     return SupervisorMonitorReport(
         state_path=str(state_path),
@@ -839,6 +849,8 @@ def run_monitor_supervisor(state_path: Path) -> SupervisorMonitorReport:
         dashboard_path=(str(payload["dashboard_path"]) if payload.get("dashboard_path") else None),
         research_scan=research_scan,
         strategy_lab=strategy_lab if isinstance(strategy_lab, dict) else None,
+        personal_journal=personal_journal if isinstance(personal_journal, dict) else None,
+        fast_research_lab=fast_research_lab if isinstance(fast_research_lab, dict) else None,
         supervisor=supervisor,
         paper_forward=paper_forward,
     )
@@ -1293,6 +1305,9 @@ def _build_supervisor_report(
         required_days = last_prepare_report.capture_report.final_history_status.required_days
     history_progress = _build_history_progress(required_days, progress_samples) if required_days > 0 else None
     strategy_lab_review = review_strategy_lab(Path(bot_config.telemetry_path), bot_config)
+    strategy_lab_payload = asdict(strategy_lab_review)
+    personal_journal_payload = build_personal_journal_payload(run_personal_journal_report(Path(bot_config.personal_journal_path)))
+    fast_research_lab_payload = build_fast_research_lab_payload(strategy_lab_payload, Path(bot_config.telemetry_path))
     paper_forward_pid = launch_report.pid if launch_report is not None else None
     summary_json_path, summary_markdown_path, dashboard_path = _artifact_paths(state_path, bot_config)
     daily_summary = _build_daily_summary(
@@ -1304,7 +1319,7 @@ def _build_supervisor_report(
         last_prepare_report=last_prepare_report,
         launch_report=launch_report,
         research_scan=research_scan,
-        strategy_lab=asdict(strategy_lab_review),
+        strategy_lab=strategy_lab_payload,
     )
     return PaperForwardSupervisorReport(
         status=status,
@@ -1324,7 +1339,9 @@ def _build_supervisor_report(
         last_prepare_report=last_prepare_report,
         launch_report=launch_report,
         research_scan=research_scan,
-        strategy_lab=asdict(strategy_lab_review),
+        strategy_lab=strategy_lab_payload,
+        personal_journal=personal_journal_payload,
+        fast_research_lab=fast_research_lab_payload,
     )
 
 

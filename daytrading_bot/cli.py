@@ -20,6 +20,7 @@ from .history import load_local_histories
 from .kraken import KrakenPublicClient
 from .live import run_live_scanner
 from .models import ActiveTrade, DayTradeIntent
+from .personal_journal import append_personal_trade, build_personal_trade_entry, ensure_personal_journal_path, run_personal_journal_report
 from .research import run_walk_forward, run_walk_forward_optimization
 from .reporting import run_forward_test_report, run_signal_debug_report
 from .runtime_layout import build_runtime_paths, migrate_legacy_runtime
@@ -295,6 +296,37 @@ def build_parser() -> argparse.ArgumentParser:
     bootstrap_device.add_argument("--desktop-dir", default=None)
     bootstrap_device.add_argument("--migrate-legacy", action="store_true")
     bootstrap_device.add_argument("--move-legacy", action="store_true")
+
+    init_personal_journal = sub.add_parser("init-personal-journal", help="Create the local personal trading journal file if it does not exist")
+    init_personal_journal.add_argument("--path", default=None)
+
+    personal_journal_report = sub.add_parser("personal-journal-report", help="Summarize manually logged personal trades")
+    personal_journal_report.add_argument("--path", default=None)
+
+    append_personal = sub.add_parser("append-personal-trade", help="Append one personal/manual trade to the local journal")
+    append_personal.add_argument("--path", default=None)
+    append_personal.add_argument("--market", required=True)
+    append_personal.add_argument("--instrument", required=True)
+    append_personal.add_argument("--venue", default="")
+    append_personal.add_argument("--side", default="long")
+    append_personal.add_argument("--strategy-name", required=True)
+    append_personal.add_argument("--setup-family", default="")
+    append_personal.add_argument("--timeframe", required=True)
+    append_personal.add_argument("--status", default="closed")
+    append_personal.add_argument("--entry-ts", default=None)
+    append_personal.add_argument("--exit-ts", default=None)
+    append_personal.add_argument("--entry-price", type=float, default=None)
+    append_personal.add_argument("--exit-price", type=float, default=None)
+    append_personal.add_argument("--pnl-eur", type=float, required=True)
+    append_personal.add_argument("--pnl-pct", type=float, default=None)
+    append_personal.add_argument("--fees-eur", type=float, default=0.0)
+    append_personal.add_argument("--size-notional-eur", type=float, default=None)
+    append_personal.add_argument("--confidence-before", type=int, default=None)
+    append_personal.add_argument("--confidence-after", type=int, default=None)
+    append_personal.add_argument("--lesson", default="")
+    append_personal.add_argument("--notes", default="")
+    append_personal.add_argument("--tags", default="")
+    append_personal.add_argument("--mistakes", default="")
 
     stop_runtime = sub.add_parser("stop-runtime", help="Request a clean stop for the supervisor and/or paper-forward runtime")
     stop_runtime.add_argument("--state-path", required=True)
@@ -709,6 +741,45 @@ def main() -> None:
                 move_legacy=args.move_legacy,
             )
         )
+        return
+
+    if args.command == "init-personal-journal":
+        path = Path(args.path) if args.path else Path(bot_config.personal_journal_path)
+        _emit_json({"path": str(ensure_personal_journal_path(path)), "status": "ready"})
+        return
+
+    if args.command == "personal-journal-report":
+        path = Path(args.path) if args.path else Path(bot_config.personal_journal_path)
+        _emit_json(asdict(run_personal_journal_report(path)))
+        return
+
+    if args.command == "append-personal-trade":
+        path = Path(args.path) if args.path else Path(bot_config.personal_journal_path)
+        entry = build_personal_trade_entry(
+            market=args.market,
+            instrument=args.instrument,
+            venue=args.venue,
+            side=args.side,
+            strategy_name=args.strategy_name,
+            setup_family=args.setup_family,
+            timeframe=args.timeframe,
+            status=args.status,
+            entry_ts=args.entry_ts,
+            exit_ts=args.exit_ts,
+            entry_price=args.entry_price,
+            exit_price=args.exit_price,
+            pnl_eur=args.pnl_eur,
+            pnl_pct=args.pnl_pct,
+            fees_eur=args.fees_eur,
+            size_notional_eur=args.size_notional_eur,
+            confidence_before=args.confidence_before,
+            confidence_after=args.confidence_after,
+            lesson=args.lesson,
+            notes=args.notes,
+            tags=[item for item in args.tags.split(",") if item.strip()],
+            mistakes=[item for item in args.mistakes.split(",") if item.strip()],
+        )
+        _emit_json(append_personal_trade(path, entry))
         return
 
     if args.command == "stop-runtime":

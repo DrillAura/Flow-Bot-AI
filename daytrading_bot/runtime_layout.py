@@ -15,8 +15,10 @@ class RuntimePaths:
     data_dir: str
     logs_dir: str
     ops_logs_dir: str
+    journal_dir: str
     telemetry_path: str
     strategy_lab_state_path: str
+    personal_journal_path: str
 
 
 def sanitize_device_id(value: str) -> str:
@@ -60,8 +62,10 @@ def build_runtime_paths(project_root: str | Path | None = None, device_id: str |
     data_dir = runtime_root / "data"
     logs_dir = runtime_root / "logs"
     ops_logs_dir = logs_dir / "ops"
+    journal_dir = runtime_root / "journal"
     telemetry_path = logs_dir / "trading_events.jsonl"
     strategy_lab_state_path = logs_dir / "strategy_lab_state.json"
+    personal_journal_path = journal_dir / "personal_trades.jsonl"
     return RuntimePaths(
         project_root=str(root),
         device_id=resolved_device_id,
@@ -69,13 +73,15 @@ def build_runtime_paths(project_root: str | Path | None = None, device_id: str |
         data_dir=str(data_dir),
         logs_dir=str(logs_dir),
         ops_logs_dir=str(ops_logs_dir),
+        journal_dir=str(journal_dir),
         telemetry_path=str(telemetry_path),
         strategy_lab_state_path=str(strategy_lab_state_path),
+        personal_journal_path=str(personal_journal_path),
     )
 
 
 def ensure_runtime_dirs(paths: RuntimePaths) -> RuntimePaths:
-    for raw_path in (paths.runtime_root, paths.data_dir, paths.logs_dir, paths.ops_logs_dir):
+    for raw_path in (paths.runtime_root, paths.data_dir, paths.logs_dir, paths.ops_logs_dir, paths.journal_dir):
         Path(raw_path).mkdir(parents=True, exist_ok=True)
     return paths
 

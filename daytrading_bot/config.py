@@ -251,6 +251,20 @@ class BotConfig:
     break_even_fee_buffer_pct: float = 0.0010
     trail_atr_multiple: float = 0.8
     max_hold_minutes: int = 120
+    fast_min_micro_samples: int = 8
+    fast_max_spread_bps: float = 6.0
+    fast_min_imbalance: float = 1.14
+    fast_min_change_1s_bps: float = 1.5
+    fast_min_change_5s_bps: float = 3.0
+    fast_max_range_5s_bps: float = 20.0
+    fast_min_adx_15m: float = 18.0
+    fast_stop_atr_multiple: float = 0.45
+    fast_max_stop_pct: float = 0.0045
+    fast_break_even_trigger_r: float = 0.35
+    fast_trail_activation_r: float = 0.55
+    fast_max_hold_minutes: int = 12
+    fast_time_decay_minutes: int = 5
+    fast_time_decay_min_r: float = 0.03
     paper_maker_fee_rate: float = 0.0025
     paper_taker_fee_rate: float = 0.0040
     paper_entry_maker_probability_cap: float = 0.35
@@ -268,6 +282,7 @@ class BotConfig:
     shadow_portfolio_behaviors: tuple[str, ...] = ("defensive", "balanced", "growth", "aggressive", "fast_research")
     telemetry_path: str = "logs/trading_events.jsonl"
     strategy_lab_state_path: str = "logs/strategy_lab_state.json"
+    personal_journal_path: str = "journal/personal_trades.jsonl"
     active_strategy_id: str = "champion_breakout"
     strategy_lab_min_closed_trades: int = 6
     strategy_lab_min_profit_factor: float = 1.10
@@ -327,6 +342,7 @@ def load_config_from_env(
         strategy_lab_pinned_paper_strategy_id=os.getenv("BOT_PINNED_PAPER_STRATEGY", "").strip(),
         telemetry_path=os.getenv("BOT_TELEMETRY_PATH", "").strip() or runtime_paths.telemetry_path,
         strategy_lab_state_path=os.getenv("BOT_STRATEGY_LAB_STATE_PATH", "").strip() or runtime_paths.strategy_lab_state_path,
+        personal_journal_path=os.getenv("BOT_PERSONAL_JOURNAL_PATH", "").strip() or runtime_paths.personal_journal_path,
     )
     mode = os.getenv("BOT_MODE", "paper").lower()
     if mode not in {"paper", "live"}:

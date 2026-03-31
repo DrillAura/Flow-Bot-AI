@@ -83,6 +83,8 @@ class DashboardAppTests(unittest.TestCase):
         self.assertIn("signal_observatory", overview)
         self.assertIn("shadow_portfolios", overview)
         self.assertIn("strategy_lab", overview)
+        self.assertIn("personal_journal", overview)
+        self.assertIn("fast_research_lab", overview)
         self.assertIn("filter_options", overview["shadow_portfolios"])
         self.assertIn("copilot", overview)
         self.assertEqual(overview["strategy_lab"]["current_paper_strategy_id"], "mean_reversion_vwap")
@@ -168,12 +170,23 @@ class DashboardAppTests(unittest.TestCase):
         self.assertIn("selected-trade-title", index)
         self.assertIn("mae-mfe-chart", index)
         self.assertIn("trade-replay-chart", index)
+        self.assertIn("personal-journal-summary-grid", index)
+        self.assertIn("personal-journal-entry-list", index)
+        self.assertIn("journal-filter-asset", index)
+        self.assertIn("journal-filter-strategy", index)
+        self.assertIn("journal-filter-tag", index)
+        self.assertIn("fast-research-summary-grid", index)
+        self.assertIn("fast-research-card-list", index)
+        self.assertIn("fast-research-filter-family", index)
+        self.assertIn("fast-research-filter-status", index)
         self.assertIn("strategy-lab-asset-meta", index)
         self.assertIn("strategy-lab-asset-body", index)
         self.assertEqual(overview["monitor"]["status"], "waiting_for_history")
         self.assertIn("market", overview)
         self.assertIn("trade_analytics", overview)
         self.assertIn("copilot", overview)
+        self.assertIn("personal_journal", overview)
+        self.assertIn("fast_research_lab", overview)
         self.assertTrue(health["ok"])
 
     def test_query_windows_task_decodes_non_utf8_output(self) -> None:
@@ -317,6 +330,154 @@ class DashboardAppTests(unittest.TestCase):
                                 "regime_breakdown": [],
                                 "setup_breakdown": [],
                             },
+                        ],
+                    },
+                    "personal_journal": {
+                        "updated_at": datetime.now(timezone.utc).isoformat(),
+                        "summary": {
+                            "title": "Personal Trading Journal",
+                            "subtitle": "Manuelle Trades, Learnings und einfache Erklaerungen",
+                            "total_entries": 4,
+                            "winning_entries": 3,
+                            "losing_entries": 1,
+                            "win_rate": 0.75,
+                            "realized_pnl_eur": 42.5,
+                            "largest_win_eur": 28.0,
+                            "largest_loss_eur": -9.5,
+                            "active_strategies": 3,
+                            "tracked_assets": 4,
+                            "kpis": [
+                                {"label": "Discipline", "value": "High"},
+                                {"label": "Learning Pace", "value": "Steady"},
+                            ],
+                        },
+                        "entries": [
+                            {
+                                "title": "SOL swing hold",
+                                "entry_ts": "2026-03-27T08:10:00+00:00",
+                                "asset": "SOL",
+                                "strategy": "manual_swing",
+                                "pnl_eur": 28.0,
+                                "confidence": 0.84,
+                                "source": "manual",
+                                "tags": ["swing", "crypto", "trend"],
+                            },
+                            {
+                                "title": "DOGE scalp",
+                                "entry_ts": "2026-03-27T10:15:00+00:00",
+                                "asset": "DOGE",
+                                "strategy": "micro_trend",
+                                "pnl_eur": 9.5,
+                                "confidence": 0.71,
+                                "source": "manual",
+                                "tags": ["scalp", "crypto"],
+                            },
+                            {
+                                "title": "BTC paper lesson",
+                                "entry_ts": "2026-03-27T12:30:00+00:00",
+                                "asset": "BTC",
+                                "strategy": "breakout_notes",
+                                "pnl_eur": -9.5,
+                                "confidence": 0.52,
+                                "source": "manual",
+                                "tags": ["lesson", "btc", "breakout"],
+                            },
+                            {
+                                "title": "XAU fast trial",
+                                "entry_ts": "2026-03-27T15:45:00+00:00",
+                                "asset": "XAU",
+                                "strategy": "risk_control",
+                                "pnl_eur": 14.5,
+                                "confidence": 0.79,
+                                "source": "manual",
+                                "tags": ["futures", "macro"],
+                            },
+                        ],
+                        "strategy_notes": [
+                            {"title": "Cut losers faster", "detail": "Exit earlier when the thesis breaks", "takeaway": "Protect capital"},
+                        ],
+                        "learning_points": [
+                            {"title": "Follow the plan", "detail": "Avoid random entries", "takeaway": "Rule over impulse"},
+                        ],
+                        "beginner_notes": [
+                            {"term": "PnL", "simple": "Gewinn oder Verlust eines Trades"},
+                        ],
+                        "asset_breakdown": [
+                            {"label": "SOL", "value": 28.0},
+                            {"label": "DOGE", "value": 9.5},
+                            {"label": "BTC", "value": -9.5},
+                            {"label": "XAU", "value": 14.5},
+                        ],
+                    },
+                    "fast_research_lab": {
+                        "updated_at": datetime.now(timezone.utc).isoformat(),
+                        "summary": {
+                            "title": "Fast-Trading Research Lane",
+                            "subtitle": "Micro-Strategien nur im sicheren Paper-Lab",
+                            "status": "active",
+                            "champion_strategy_id": "micro_orb",
+                            "live_candidate_strategy_id": "trend_continuation_pullback",
+                            "strategies_seen": 3,
+                            "eligible_strategies": 2,
+                            "highest_score": 91.4,
+                            "best_expectancy_eur": 0.18,
+                        },
+                        "strategies": [
+                            {
+                                "strategy_id": "micro_orb",
+                                "label": "Micro ORB",
+                                "family": "opening_range_breakout",
+                                "status": "eligible",
+                                "score": 91.4,
+                                "win_rate": 0.67,
+                                "profit_factor": 1.9,
+                                "expectancy_eur": 0.18,
+                                "eligible_for_promotion": True,
+                            },
+                            {
+                                "strategy_id": "trend_continuation_pullback",
+                                "label": "Trend Pullback",
+                                "family": "trend_continuation",
+                                "status": "watch",
+                                "score": 84.2,
+                                "win_rate": 0.61,
+                                "profit_factor": 1.5,
+                                "expectancy_eur": 0.09,
+                                "eligible_for_promotion": False,
+                            },
+                            {
+                                "strategy_id": "failed_breakout_reclaim",
+                                "label": "Failed Breakout Reclaim",
+                                "family": "mean_reversion",
+                                "status": "watch",
+                                "score": 76.8,
+                                "win_rate": 0.55,
+                                "profit_factor": 1.2,
+                                "expectancy_eur": 0.03,
+                                "eligible_for_promotion": False,
+                            },
+                        ],
+                        "experiments": [
+                            {"label": "Fast ORB 50EUR", "status": "complete", "net_pnl_eur": 1.8},
+                            {"label": "Trend Pullback 100EUR", "status": "running", "net_pnl_eur": 0.4},
+                            {"label": "Failed Reclaim 250EUR", "status": "complete", "net_pnl_eur": -0.2},
+                        ],
+                        "micro_signals": [
+                            {"label": "BTC 5s compression", "regime_label": "high_volatility"},
+                            {"label": "SOL 1s absorption", "regime_label": "trend"},
+                        ],
+                        "signals": {
+                            "observed": 12,
+                            "paper_candidates": 5,
+                            "micro_rejections": 7,
+                        },
+                        "filter_options": {
+                            "families": ["opening_range_breakout", "trend_continuation", "mean_reversion"],
+                            "statuses": ["eligible", "watch", "complete", "running"],
+                            "regimes": ["high_volatility", "trend"],
+                        },
+                        "beginner_notes": [
+                            {"term": "Micro strategy", "simple": "Sehr kurzer, schneller Handel mit kleinen Chancen"},
                         ],
                     },
                     "daily_summary_json_path": str(state_path.parent / "supervisor_daily_summary.json"),

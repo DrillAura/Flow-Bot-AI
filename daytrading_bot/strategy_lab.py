@@ -19,6 +19,7 @@ class StrategySpec:
     strategy_type: str
     description: str
     config_overrides: dict[str, float | int | str]
+    promotion_allowed: bool = True
 
 
 @dataclass(frozen=True)
@@ -149,12 +150,37 @@ def build_strategy_specs() -> list[StrategySpec]:
             description="Continuation challenger that buys pullbacks back into trend support before the next expansion leg.",
             config_overrides={},
         ),
+        StrategySpec(
+            strategy_id="fast_imbalance_scalp",
+            label="Fast Imbalance Scalp",
+            family="fast_trading",
+            strategy_type="fast_micro_scalp",
+            description="Research-only micro scalp lane using 1S/5S thrust, spread compression and orderbook imbalance.",
+            config_overrides={},
+            promotion_allowed=False,
+        ),
+        StrategySpec(
+            strategy_id="fast_imbalance_scalp_tight",
+            label="Fast Imbalance Scalp Tight",
+            family="fast_trading",
+            strategy_type="fast_micro_scalp",
+            description="Tighter fast lane variant with stronger micro thrust and faster time decay.",
+            config_overrides={
+                "fast_min_change_1s_bps": 2.2,
+                "fast_min_change_5s_bps": 4.2,
+                "fast_max_hold_minutes": 8,
+                "fast_time_decay_minutes": 4,
+                "fast_time_decay_min_r": 0.05,
+            },
+            promotion_allowed=False,
+        ),
     ]
 
 
 def build_strategy(strategy_spec: StrategySpec, bot_config: BotConfig):
     from .strategy import (
         BreakoutPullbackStrategy,
+        FastMicroScalpStrategy,
         MeanReversionVwapStrategy,
         OpeningRangeBreakoutStrategy,
         TrendContinuationPullbackStrategy,
@@ -174,6 +200,12 @@ def build_strategy(strategy_spec: StrategySpec, bot_config: BotConfig):
         )
     if strategy_spec.strategy_type == "trend_continuation_pullback":
         return TrendContinuationPullbackStrategy(
+            bot_config,
+            strategy_id=strategy_spec.strategy_id,
+            strategy_family=strategy_spec.family,
+        )
+    if strategy_spec.strategy_type == "fast_micro_scalp":
+        return FastMicroScalpStrategy(
             bot_config,
             strategy_id=strategy_spec.strategy_id,
             strategy_family=strategy_spec.family,
@@ -466,6 +498,12 @@ def _summarize_strategy(spec: StrategySpec, events: list[dict[str, Any]], bot_co
             passed=dominant_asset_share <= bot_config.strategy_lab_max_asset_concentration,
             actual=round(dominant_asset_share, 4),
             threshold=f"<= {bot_config.strategy_lab_max_asset_concentration:.2f}",
+        ),
+        "promotion_allowed": StrategyGateResult(
+            name="promotion_allowed",
+            passed=spec.promotion_allowed,
+            actual=str(spec.promotion_allowed).lower(),
+            threshold="true",
         ),
     }
     eligible = all(gate.passed for gate in gates.values())

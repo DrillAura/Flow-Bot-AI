@@ -15,8 +15,10 @@ from typing import Any
 
 from .config import BotConfig
 from .dashboard import load_supervisor_state_payload
+from .fast_research_lab import build_fast_research_lab_payload
 from .kraken import KrakenPublicClient, TIMEFRAME_WINDOWS
 from .models import PriceSample
+from .personal_journal import build_personal_journal_payload, run_personal_journal_report
 from .reporting import run_forward_test_report
 from .shadow_portfolios import run_shadow_portfolio_report
 from .signal_observatory import run_signal_observatory_report
@@ -429,6 +431,142 @@ def build_analytics_overview(
         "pair_performance": trade_analytics.get("pair_performance", []),
         "quality_breakdown": trade_analytics.get("quality_breakdown", []),
     }
+
+
+def build_personal_journal_overview(raw_payload: dict[str, Any] | None) -> dict[str, Any]:
+    payload = raw_payload if isinstance(raw_payload, dict) else {}
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    entries = [entry for entry in (payload.get("entries") or []) if isinstance(entry, dict)]
+    strategy_notes = [_normalize_journal_learning_entry(entry, fallback_title="Strategy note") for entry in (payload.get("strategy_notes") or []) if isinstance(entry, (dict, str))]
+    learning_points = [_normalize_journal_learning_entry(entry, fallback_title="Learning point") for entry in (payload.get("learning_points") or []) if isinstance(entry, (dict, str))]
+    asset_breakdown = [entry for entry in (payload.get("asset_breakdown") or []) if isinstance(entry, dict)]
+    kpis = summary.get("kpis") if isinstance(summary.get("kpis"), list) else []
+    beginner_notes = [_normalize_journal_learning_entry(entry, fallback_title="Beginner note") for entry in (payload.get("beginner_notes") or []) if isinstance(entry, (dict, str))]
+    recent_activity = entries[:8]
+    return {
+        "source_exists": bool(payload),
+        "updated_at": payload.get("updated_at"),
+        "summary": {
+            "title": summary.get("title", "Personal Trading Journal"),
+            "subtitle": summary.get("subtitle", "Manuelle Trades, Learnings und Strategien in einer Sammelstelle"),
+            "total_entries": int(summary.get("total_entries") or len(entries)),
+            "winning_entries": int(summary.get("winning_entries") or sum(1 for entry in entries if float(entry.get("pnl_eur") or 0.0) > 0.0)),
+            "losing_entries": int(summary.get("losing_entries") or sum(1 for entry in entries if float(entry.get("pnl_eur") or 0.0) < 0.0)),
+            "win_rate": float(summary.get("win_rate") or (sum(1 for entry in entries if float(entry.get("pnl_eur") or 0.0) > 0.0) / len(entries) if entries else 0.0)),
+            "realized_pnl_eur": float(summary.get("realized_pnl_eur") or sum(float(entry.get("pnl_eur") or 0.0) for entry in entries)),
+            "largest_win_eur": float(summary.get("largest_win_eur") or max((float(entry.get("pnl_eur") or 0.0) for entry in entries), default=0.0)),
+            "largest_loss_eur": float(summary.get("largest_loss_eur") or min((float(entry.get("pnl_eur") or 0.0) for entry in entries), default=0.0)),
+            "active_strategies": int(summary.get("active_strategies") or len({str(entry.get("strategy") or "n/a") for entry in entries})),
+            "tracked_assets": int(summary.get("tracked_assets") or len({str(entry.get("asset") or "n/a") for entry in entries})),
+        },
+        "kpis": kpis,
+        "entries": entries,
+        "strategy_notes": strategy_notes,
+        "learning_points": learning_points,
+        "asset_breakdown": asset_breakdown,
+        "beginner_notes": beginner_notes,
+        "recent_activity": recent_activity,
+        "filter_options": {
+            "assets": sorted({str(entry.get("asset") or "").upper() for entry in entries if entry.get("asset")} ),
+            "strategies": sorted({str(entry.get("strategy") or "").strip() for entry in entries if entry.get("strategy")} ),
+            "tags": sorted({str(tag) for entry in entries for tag in (entry.get("tags") or []) if tag}),
+        },
+        "charts": {
+            "pnl_series": [float(entry.get("pnl_eur") or 0.0) for entry in entries][-30:],
+            "confidence_series": [float(entry.get("confidence") or 0.0) for entry in entries][-30:],
+            "win_loss_series": [
+                {"label": "Wins", "value": sum(1 for entry in entries if float(entry.get("pnl_eur") or 0.0) > 0.0)},
+                {"label": "Losses", "value": sum(1 for entry in entries if float(entry.get("pnl_eur") or 0.0) < 0.0)},
+            ],
+        },
+    }
+
+
+def build_fast_research_lab_overview(
+    raw_payload: dict[str, Any] | None,
+    *,
+    strategy_lab: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    payload = raw_payload if isinstance(raw_payload, dict) else {}
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    strategies = [row for row in (payload.get("strategies") or []) if isinstance(row, dict)]
+    experiments = [row for row in (payload.get("experiments") or []) if isinstance(row, dict)]
+    micro_signals = [row for row in (payload.get("micro_signals") or []) if isinstance(row, dict)]
+    strategy_lab_payload = strategy_lab if isinstance(strategy_lab, dict) else {}
+    champion = str(payload.get("champion_strategy_id") or strategy_lab_payload.get("current_paper_strategy_id") or "n/a")
+    live_candidate = str(payload.get("live_candidate_strategy_id") or strategy_lab_payload.get("current_live_strategy_id") or "n/a")
+    return {
+        "source_exists": bool(payload),
+        "updated_at": payload.get("updated_at"),
+        "summary": {
+            "title": summary.get("title", "Fast-Trading Research Lane"),
+            "subtitle": summary.get("subtitle", "Neue Micro-Strategien nur im sicheren Paper-Lab"),
+            "status": summary.get("status", "waiting_for_data"),
+            "champion_strategy_id": champion,
+            "live_candidate_strategy_id": live_candidate,
+            "strategies_seen": int(summary.get("strategies_seen") or len(strategies)),
+            "eligible_strategies": int(summary.get("eligible_strategies") or sum(1 for row in strategies if bool(row.get("eligible_for_promotion")))),
+            "highest_score": float(summary.get("highest_score") or max((float(row.get("score") or 0.0) for row in strategies), default=0.0)),
+            "best_expectancy_eur": float(summary.get("best_expectancy_eur") or max((float(row.get("expectancy_eur") or 0.0) for row in strategies), default=0.0)),
+        },
+        "strategies": strategies,
+        "experiments": experiments,
+        "micro_signals": micro_signals,
+        "filter_options": {
+            "families": sorted({str(row.get("family") or "") for row in strategies if row.get("family")} ),
+            "statuses": sorted({str(row.get("status") or "") for row in experiments if row.get("status")} ),
+            "regimes": sorted({str(row.get("regime_label") or "") for row in micro_signals if row.get("regime_label")} ),
+        },
+        "ranking": sorted(
+            [
+                {
+                    "strategy_id": str(row.get("strategy_id") or row.get("label") or "n/a"),
+                    "label": str(row.get("label") or row.get("strategy_id") or "n/a"),
+                    "score": float(row.get("score") or 0.0),
+                    "win_rate": float(row.get("win_rate") or 0.0),
+                    "profit_factor": float(row.get("profit_factor") or 0.0),
+                    "expectancy_eur": float(row.get("expectancy_eur") or 0.0),
+                    "status": str(row.get("status") or ("eligible" if row.get("eligible_for_promotion") else "watch")),
+                    "notes": str(row.get("notes") or ""),
+                }
+                for row in strategies
+            ],
+            key=lambda row: row["score"],
+            reverse=True,
+        ),
+        "beginner_notes": [_normalize_journal_learning_entry(entry, fallback_title="Fast note") for entry in (payload.get("beginner_notes") or []) if isinstance(entry, (dict, str))],
+        "signals": {
+            "observed": int((payload.get("signals") or {}).get("observed") or payload.get("observed_signals") or len(micro_signals)),
+            "paper_candidates": int((payload.get("signals") or {}).get("paper_candidates") or payload.get("paper_candidates") or sum(1 for row in micro_signals if row.get("tradable"))),
+            "micro_rejections": int((payload.get("signals") or {}).get("micro_rejections") or payload.get("micro_rejections") or max(len(micro_signals) - sum(1 for row in micro_signals if row.get("tradable")), 0)),
+        },
+    }
+
+
+def _normalize_journal_learning_entry(entry: dict[str, Any] | str, *, fallback_title: str) -> dict[str, Any]:
+    if isinstance(entry, str):
+        return {"title": fallback_title, "detail": entry, "takeaway": ""}
+    title = (
+        entry.get("title")
+        or entry.get("term")
+        or entry.get("strategy")
+        or entry.get("label")
+        or fallback_title
+    )
+    detail = (
+        entry.get("detail")
+        or entry.get("note")
+        or entry.get("simple")
+        or (f"Count {entry.get('value')}" if entry.get("value") is not None else "")
+        or "n/a"
+    )
+    takeaway = (
+        entry.get("takeaway")
+        or entry.get("reason")
+        or entry.get("category")
+        or ""
+    )
+    return {"title": title, "detail": detail, "takeaway": takeaway, **entry}
 
 
 def _load_dashboard_telemetry_events(path: Path) -> list[dict[str, Any]]:
@@ -947,6 +1085,7 @@ def build_dashboard_overview(
     project_root = _infer_project_root(data_dir, logs_root)
     telemetry_path = _resolve_telemetry_path(project_root, bot_config.telemetry_path)
     strategy_lab_path = _resolve_telemetry_path(project_root, bot_config.strategy_lab_state_path)
+    personal_journal_path = _resolve_telemetry_path(project_root, bot_config.personal_journal_path)
     recent_runs = list_recent_runs(logs_root, limit=recent_run_limit)
     last_cycle = summarize_last_cycle(state_payload)
     forward_report = asdict(run_forward_test_report(telemetry_path, bot_config))
@@ -965,6 +1104,17 @@ def build_dashboard_overview(
     elif not isinstance(strategy_lab_payload, dict) or not strategy_lab_payload:
         strategy_lab_payload = standalone_strategy_lab_payload
     strategy_lab = build_strategy_lab_overview(strategy_lab_payload if isinstance(strategy_lab_payload, dict) else {})
+    personal_journal_payload = state_payload.get("personal_journal") if isinstance(state_payload, dict) else None
+    if not isinstance(personal_journal_payload, dict) or not personal_journal_payload:
+        personal_journal_payload = build_personal_journal_payload(run_personal_journal_report(personal_journal_path))
+    fast_research_payload = state_payload.get("fast_research_lab") if isinstance(state_payload, dict) else None
+    if not isinstance(fast_research_payload, dict) or not fast_research_payload:
+        fast_research_payload = build_fast_research_lab_payload(strategy_lab_payload if isinstance(strategy_lab_payload, dict) else {}, telemetry_path)
+    personal_journal = build_personal_journal_overview(personal_journal_payload)
+    fast_research_lab = build_fast_research_lab_overview(
+        fast_research_payload,
+        strategy_lab=strategy_lab,
+    )
     launch = build_launch_overview(
         history_status=history_status,
         state_payload=state_payload,
@@ -1002,6 +1152,8 @@ def build_dashboard_overview(
         "signal_observatory": signal_observatory,
         "shadow_portfolios": shadow_portfolios,
         "strategy_lab": strategy_lab,
+        "personal_journal": personal_journal,
+        "fast_research_lab": fast_research_lab,
         "copilot": copilot,
         "task": query_windows_task(task_name),
         "recent_runs": recent_runs,
@@ -1588,6 +1740,45 @@ def render_dashboard_app_html(overview: dict[str, Any]) -> str:
         </div>
       </section>
     </section>
+    <section class="layout-equal">
+      <section class="panel">
+        <div class="panel-header">
+          <div><h2>Personal Trading Journal</h2><div class="panel-subtitle">Deine manuelle Sammelstelle fuer Echtgeld-, Demo- und Lern-Notizen mit einfachen Auswertungen</div></div>
+        </div>
+        <div class="forward-grid" id="personal-journal-summary-grid"></div>
+        <div style="height:12px"></div>
+        <div class="filter-row">
+          <div class="filter-control"><label for="journal-filter-asset">Asset</label><select id="journal-filter-asset"></select></div>
+          <div class="filter-control"><label for="journal-filter-strategy">Strategy</label><select id="journal-filter-strategy"></select></div>
+          <div class="filter-control"><label for="journal-filter-tag">Tag</label><select id="journal-filter-tag"></select></div>
+        </div>
+        <div class="chart-shell">
+          <div class="chart"><div class="chart-caption"><span>Journal PnL and confidence</span><span id="personal-journal-chart-meta">n/a</span></div><div id="personal-journal-pnl-chart"></div><div style="height:12px"></div><div id="personal-journal-confidence-chart"></div></div>
+          <div class="chart"><div class="chart-caption"><span>Journal learning and asset mix</span><span id="personal-journal-breakdown-meta">n/a</span></div><div id="personal-journal-winloss-chart"></div><div style="height:12px"></div><div id="personal-journal-asset-chart"></div></div>
+        </div>
+        <div style="height:12px"></div>
+        <div class="list" id="personal-journal-entry-list"></div>
+        <div style="height:12px"></div>
+        <div class="list" id="personal-journal-learning-list"></div>
+      </section>
+      <section class="panel">
+        <div class="panel-header">
+          <div><h2>Fast-Trading Research Lane</h2><div class="panel-subtitle">Sichere Paper-Lane fuer Micro-Strategien, kurze Haltezeiten und schnelle Verhaltensauswertung</div></div>
+        </div>
+        <div class="forward-grid" id="fast-research-summary-grid"></div>
+        <div style="height:12px"></div>
+        <div class="filter-row">
+          <div class="filter-control"><label for="fast-research-filter-family">Family</label><select id="fast-research-filter-family"></select></div>
+          <div class="filter-control"><label for="fast-research-filter-status">Status</label><select id="fast-research-filter-status"></select></div>
+        </div>
+        <div class="chart-shell">
+          <div class="chart"><div class="chart-caption"><span>Micro strategy ranking</span><span id="fast-research-ranking-meta">n/a</span></div><div id="fast-research-ranking-chart"></div></div>
+          <div class="chart"><div class="chart-caption"><span>Signals and experiments</span><span id="fast-research-signals-meta">n/a</span></div><div id="fast-research-signals-chart"></div><div style="height:12px"></div><div id="fast-research-experiments-chart"></div></div>
+        </div>
+        <div style="height:12px"></div>
+        <div class="list" id="fast-research-card-list"></div>
+      </section>
+    </section>
     <section class="panel">
       <div class="panel-header">
         <div><h2>Strategy Lab</h2><div class="panel-subtitle">Champion/Challenger-Auswertung ueber mehrere parallel getestete Strategien im Demo-Modus</div></div>
@@ -1723,6 +1914,11 @@ def render_dashboard_app_html(overview: dict[str, Any]) -> str:
         shadowPortfolio: 'all',
         shadowBehavior: 'all',
         shadowRegime: 'all',
+        journalAsset: 'all',
+        journalStrategy: 'all',
+        journalTag: 'all',
+        fastResearchFamily: 'all',
+        fastResearchStatus: 'all',
         marketSymbol: 'all',
         marketTimeframe: '1D',
         marketSearch: '',
@@ -2128,6 +2324,11 @@ def render_dashboard_app_html(overview: dict[str, Any]) -> str:
         ['trade-filter-quality', 'quality'],
         ['trade-filter-reason', 'reason'],
         ['trade-filter-limit', 'limit'],
+        ['journal-filter-asset', 'journalAsset'],
+        ['journal-filter-strategy', 'journalStrategy'],
+        ['journal-filter-tag', 'journalTag'],
+        ['fast-research-filter-family', 'fastResearchFamily'],
+        ['fast-research-filter-status', 'fastResearchStatus'],
       ].forEach(([id, key]) => {{
         const node = document.getElementById(id);
         if (!node) return;
@@ -2366,6 +2567,56 @@ def render_dashboard_app_html(overview: dict[str, Any]) -> str:
       }});
       return [...deduped.values()];
     }}
+    function filteredPersonalJournal(journal) {{
+      const activeAsset = dashboardState.filters.journalAsset || 'all';
+      const activeStrategy = dashboardState.filters.journalStrategy || 'all';
+      const activeTag = dashboardState.filters.journalTag || 'all';
+      const entries = (journal.entries || []).filter(entry => {{
+        const asset = String(entry.asset || '').toUpperCase();
+        const strategy = String(entry.strategy || '').trim();
+        const tags = (entry.tags || []).map(tag => String(tag));
+        const assetOk = activeAsset === 'all' || asset === activeAsset;
+        const strategyOk = activeStrategy === 'all' || strategy === activeStrategy;
+        const tagOk = activeTag === 'all' || tags.includes(activeTag);
+        return assetOk && strategyOk && tagOk;
+      }});
+      const sortedEntries = entries.slice().sort((a, b) => new Date(b.entry_ts || b.ts || 0).getTime() - new Date(a.entry_ts || a.ts || 0).getTime());
+      const cumulativeSeries = [];
+      let cumulative = 0;
+      sortedEntries.slice().reverse().forEach((entry, index) => {{
+        cumulative += Number(entry.pnl_eur || 0);
+        cumulativeSeries.push({{ label: String(entry.entry_ts || entry.ts || ('entry-' + String(index))), value: cumulative }});
+      }});
+      const confidenceSeries = sortedEntries.slice().reverse().map((entry, index) => ({{
+        label: String(entry.entry_ts || entry.ts || ('entry-' + String(index))),
+        value: Number(entry.confidence || 0),
+      }}));
+      return {{
+        activeAsset,
+        activeStrategy,
+        activeTag,
+        entries: sortedEntries,
+        cumulativeSeries,
+        confidenceSeries,
+      }};
+    }}
+    function filteredFastResearchLab(lab) {{
+      const activeFamily = dashboardState.filters.fastResearchFamily || 'all';
+      const activeStatus = dashboardState.filters.fastResearchStatus || 'all';
+      const strategies = (lab.strategies || []).filter(row => {{
+        const family = String(row.family || '').trim();
+        const status = String(row.status || (row.eligible_for_promotion ? 'eligible' : 'watch')).trim();
+        return (activeFamily === 'all' || family === activeFamily) && (activeStatus === 'all' || status === activeStatus);
+      }});
+      const experiments = (lab.experiments || []).filter(row => (activeStatus === 'all' || String(row.status || '').trim() === activeStatus));
+      const ranking = strategies.slice().sort((a, b) => Number(b.score || 0) - Number(a.score || 0));
+      return {{
+        activeFamily,
+        activeStatus,
+        strategies: ranking,
+        experiments,
+      }};
+    }}
     function filteredShadowData(shadow) {{
       const filterOptions = shadow.filter_options || {{}};
       const activePortfolio = dashboardState.filters.shadowPortfolio || 'all';
@@ -2388,6 +2639,79 @@ def render_dashboard_app_html(overview: dict[str, Any]) -> str:
         regimeRows,
         setupRows,
       }};
+    }}
+    function renderPersonalJournalSection(overview) {{
+      const journal = overview.personal_journal || {{}};
+      const journalView = filteredPersonalJournal(journal);
+      const summary = journal.summary || {{}};
+      const filterOptions = journal.filter_options || {{}};
+      setSelectOptions('journal-filter-asset', filterOptions.assets || [], journalView.activeAsset, 'All assets');
+      setSelectOptions('journal-filter-strategy', filterOptions.strategies || [], journalView.activeStrategy, 'All strategies');
+      setSelectOptions('journal-filter-tag', filterOptions.tags || [], journalView.activeTag, 'All tags');
+      setHTML('personal-journal-summary-grid', [
+        ['Entries', fmtText(summary.total_entries ?? journalView.entries.length)],
+        ['Win Rate', fmtPercent(Number(summary.win_rate || 0) * 100)],
+        ['Realized PnL', `${{fmtNumber(summary.realized_pnl_eur, 2)}} EUR`],
+        ['Largest Win', `${{fmtNumber(summary.largest_win_eur, 2)}} EUR`],
+        ['Largest Loss', `${{fmtNumber(summary.largest_loss_eur, 2)}} EUR`],
+        ['Active Strategies', fmtText(summary.active_strategies ?? 0)],
+      ].map(([label, value]) => `<div class="mini-metric"><div class="label">${{escapeHtml(label)}}</div><div class="value">${{escapeHtml(value)}}</div></div>`).join(''));
+      setHTML('personal-journal-pnl-chart', metricLineSvg(journalView.cumulativeSeries || [], '#f4b24f', 'rgba(244,178,79,0.14)'));
+      setHTML('personal-journal-confidence-chart', metricLineSvg(journalView.confidenceSeries || [], '#62b8ff', 'rgba(98,184,255,0.14)'));
+      setHTML('personal-journal-winloss-chart', labeledBarChartSvg((journal.charts && journal.charts.win_loss_series) || [], 'rgba(56,211,159,0.88)'));
+      setHTML('personal-journal-asset-chart', labeledBarChartSvg(journal.asset_breakdown || [], 'rgba(98,184,255,0.88)'));
+      setText('personal-journal-chart-meta', `${{journalView.entries.length}} filtered entries | asset ${{journalView.activeAsset}}`);
+      setText('personal-journal-breakdown-meta', `strategies ${{(filterOptions.strategies || []).length}} | tags ${{(filterOptions.tags || []).length}}`);
+      setHTML('personal-journal-entry-list', journalView.entries.slice(0, 16).map(entry => `
+        <div class="list-item">
+          <strong>${{escapeHtml(entry.title || entry.asset || entry.strategy || 'Journal Entry')}}</strong>
+          <span>${{escapeHtml(entry.entry_ts || entry.ts || 'n/a')}} | ${{escapeHtml(entry.asset || 'n/a')}} | ${{escapeHtml(entry.strategy || 'n/a')}}</span>
+          <span class="path">PnL ${{fmtNumber(entry.pnl_eur, 2)}} EUR | confidence ${{fmtPercent(Number(entry.confidence || 0) * 100)}} | source ${{escapeHtml(entry.source || 'manual')}}</span>
+        </div>
+      `).join('') || '<div class="list-item"><strong>No journal entries</strong><span>Wenn du spaeter manuelle Trades eintraegst, erscheinen sie hier mit PnL, Strategie und Lernnotizen.</span></div>');
+      setHTML('personal-journal-learning-list', [
+        ...(journal.strategy_notes || []),
+        ...(journal.learning_points || []),
+        ...(journal.beginner_notes || []),
+      ].slice(0, 12).map(item => `
+        <div class="list-item">
+          <strong>${{escapeHtml(item.title || item.term || 'Learning')}}</strong>
+          <span>${{escapeHtml(item.detail || item.note || item.simple || 'n/a')}}</span>
+          <span class="path">${{escapeHtml(item.takeaway || item.reason || item.category || '')}}</span>
+        </div>
+      `).join('') || '<div class="list-item"><strong>No learnings yet</strong><span>Hier werden spaeter deine Strategie-Notizen und Learnings gebuendelt.</span></div>');
+    }}
+    function renderFastResearchSection(overview) {{
+      const lab = overview.fast_research_lab || {{}};
+      const labView = filteredFastResearchLab(lab);
+      const summary = lab.summary || {{}};
+      const filterOptions = lab.filter_options || {{}};
+      setSelectOptions('fast-research-filter-family', filterOptions.families || [], labView.activeFamily, 'All families');
+      setSelectOptions('fast-research-filter-status', filterOptions.statuses || [], labView.activeStatus, 'All statuses');
+      setHTML('fast-research-summary-grid', [
+        ['Strategies', fmtText(summary.strategies_seen ?? labView.strategies.length)],
+        ['Eligible', fmtText(summary.eligible_strategies ?? 0)],
+        ['Highest Score', fmtNumber(summary.highest_score, 2)],
+        ['Best Expectancy', `${{fmtNumber(summary.best_expectancy_eur, 2)}} EUR`],
+        ['Champion', fmtText(summary.champion_strategy_id)],
+        ['Status', fmtText(summary.status)],
+      ].map(([label, value]) => `<div class="mini-metric"><div class="label">${{escapeHtml(label)}}</div><div class="value">${{escapeHtml(value)}}</div></div>`).join(''));
+      setHTML('fast-research-ranking-chart', labeledBarChartSvg(labView.strategies.map(row => ({{ label: row.label || row.strategy_id || 'n/a', value: Number(row.score || 0) }})), 'rgba(255,179,71,0.92)'));
+      setHTML('fast-research-signals-chart', labeledBarChartSvg([
+        {{ label: 'Observed', value: Number(lab.signals && lab.signals.observed || 0) }},
+        {{ label: 'Paper', value: Number(lab.signals && lab.signals.paper_candidates || 0) }},
+        {{ label: 'Rejects', value: Number(lab.signals && lab.signals.micro_rejections || 0) * -1 }},
+      ], 'rgba(98,184,255,0.88)'));
+      setHTML('fast-research-experiments-chart', labeledBarChartSvg((lab.experiments || []).map(row => ({{ label: row.label || row.name || row.strategy_id || 'n/a', value: Number(row.net_pnl_eur || row.score || 0) }})), 'rgba(56,211,159,0.88)'));
+      setText('fast-research-ranking-meta', `${{labView.strategies.length}} strategies | family ${{labView.activeFamily}}`);
+      setText('fast-research-signals-meta', `${{(lab.signals && lab.signals.observed) || 0}} observed signals | status ${{fmtText(summary.status)}}`);
+      setHTML('fast-research-card-list', labView.strategies.slice(0, 12).map(row => `
+        <div class="list-item">
+          <strong>${{escapeHtml(row.label || row.strategy_id || 'n/a')}}</strong>
+          <span>${{escapeHtml(row.family || 'n/a')}} | ${{escapeHtml(row.status || 'watch')}} | score ${{fmtNumber(row.score, 2)}}</span>
+          <span class="path">PF ${{fmtNumber(row.profit_factor, 2)}} | WR ${{fmtPercent(Number(row.win_rate || 0) * 100)}} | expectancy ${{fmtNumber(row.expectancy_eur, 2)}} EUR</span>
+        </div>
+      `).join('') || '<div class="list-item"><strong>No fast-research rows</strong><span>Die Fast-Trading-Lane erscheint hier, sobald die Backend-Daten bereitgestellt werden.</span></div>');
     }}
     function renderShadowSection(overview) {{
       const shadow = overview.shadow_portfolios || {{}};
@@ -2736,6 +3060,8 @@ def render_dashboard_app_html(overview: dict[str, Any]) -> str:
       setText('signal-funnel-meta', `${{observedSignals}} observed | tradable ${{tradableSignals}} | setup rows ${{(observatory.setup_breakdown || []).length}}`);
       setText('signal-rejection-meta', `${{decisionRejections}} decision rejects | ${{(observatory.rejection_breakdown || []).length}} rejection buckets | ${{(observatory.analysis_window_coverage || []).length}} active windows`);
       renderShadowSection(overview);
+      renderPersonalJournalSection(overview);
+      renderFastResearchSection(overview);
       renderStrategyLabSection(overview);
       const tradeAnalytics = overview.trade_analytics || {{}};
       const tradeSummary = tradeAnalytics.summary || {{}};

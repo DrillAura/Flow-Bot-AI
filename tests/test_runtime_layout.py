@@ -18,6 +18,8 @@ class RuntimeLayoutTests(unittest.TestCase):
             self.assertEqual(paths.device_id, "laptop-main")
             self.assertTrue(paths.data_dir.endswith(".runtime\\laptop-main\\data") or paths.data_dir.endswith(".runtime/laptop-main/data"))
             self.assertTrue(paths.telemetry_path.endswith("trading_events.jsonl"))
+            self.assertTrue(paths.journal_dir.endswith(".runtime\\laptop-main\\journal") or paths.journal_dir.endswith(".runtime/laptop-main/journal"))
+            self.assertTrue(paths.personal_journal_path.endswith("personal_trades.jsonl"))
 
     def test_migrate_runtime_layout_copies_legacy_data_and_logs(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -48,6 +50,7 @@ class RuntimeLayoutTests(unittest.TestCase):
             self.assertIn(".runtime", bot_config.telemetry_path)
             self.assertIn("laptop-main", bot_config.telemetry_path)
             self.assertIn("laptop-main", bot_config.strategy_lab_state_path)
+            self.assertIn("laptop-main", bot_config.personal_journal_path)
 
 
 if __name__ == "__main__":
