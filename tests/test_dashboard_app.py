@@ -86,6 +86,10 @@ class DashboardAppTests(unittest.TestCase):
         self.assertIn("personal_journal", overview)
         self.assertIn("fast_research_lab", overview)
         self.assertIn("journal_strategy_alignment", overview)
+        self.assertIn("presets", overview["personal_journal"])
+        self.assertIn("preset_guide", overview["personal_journal"])
+        self.assertIn("beginner_hints", overview["personal_journal"])
+        self.assertIn("recommendations", overview["personal_journal"])
         self.assertIn("filter_options", overview["shadow_portfolios"])
         self.assertIn("copilot", overview)
         self.assertEqual(overview["strategy_lab"]["current_paper_strategy_id"], "mean_reversion_vwap")
@@ -96,8 +100,19 @@ class DashboardAppTests(unittest.TestCase):
         self.assertIn("all_trades", overview["trade_analytics"])
         self.assertIn("mae_mfe_points", overview["trade_analytics"])
         self.assertIn("setups", overview["trade_analytics"]["filter_options"])
+        self.assertIn("assets", overview["trade_analytics"]["filter_options"])
         self.assertIn("warnings", overview["copilot"])
         self.assertIn("gate_explanations", overview["copilot"])
+        self.assertIn("family_comparison", overview["fast_research_lab"])
+        self.assertIn("setup_comparison", overview["fast_research_lab"])
+        self.assertIn("asset_comparison", overview["fast_research_lab"])
+        self.assertIn("rejection_leaderboard", overview["fast_research_lab"])
+        self.assertIn("compare_summary", overview["fast_research_lab"])
+        self.assertIn("setups", overview["fast_research_lab"]["filter_options"])
+        self.assertIn("assets", overview["fast_research_lab"]["filter_options"])
+        self.assertGreaterEqual(len(overview["fast_research_lab"]["family_comparison"]), 1)
+        self.assertGreaterEqual(len(overview["fast_research_lab"]["setup_comparison"]), 1)
+        self.assertGreaterEqual(len(overview["fast_research_lab"]["asset_comparison"]), 1)
         if overview["trade_analytics"]["all_trades"]:
             self.assertIn("trade_key", overview["trade_analytics"]["all_trades"][0])
         self.assertEqual(len(overview["recent_runs"]), 1)
@@ -132,6 +147,7 @@ class DashboardAppTests(unittest.TestCase):
                     index = urlopen(url, timeout=5).read().decode("utf-8")
                     overview = json.loads(urlopen(f"{url}api/overview", timeout=5).read().decode("utf-8"))
                     health = json.loads(urlopen(f"{url}healthz", timeout=5).read().decode("utf-8"))
+                    favicon = urlopen(f"{url}favicon.ico", timeout=5)
                 finally:
                     server.shutdown()
                     server.server_close()
@@ -173,8 +189,12 @@ class DashboardAppTests(unittest.TestCase):
         self.assertIn("trade-replay-chart", index)
         self.assertIn("personal-journal-summary-grid", index)
         self.assertIn("journal-form-submit", index)
+        self.assertIn("journal-form-preset", index)
+        self.assertIn("journal-preset-guide", index)
+        self.assertIn("journal-beginner-hints", index)
         self.assertIn("journal-form-status", index)
         self.assertIn("personal-journal-entry-list", index)
+        self.assertIn("personal-journal-recommendation-list", index)
         self.assertIn("journal-filter-asset", index)
         self.assertIn("journal-filter-strategy", index)
         self.assertIn("journal-filter-tag", index)
@@ -184,9 +204,16 @@ class DashboardAppTests(unittest.TestCase):
         self.assertIn("fast-research-summary-grid", index)
         self.assertIn("fast-research-card-list", index)
         self.assertIn("fast-research-filter-family", index)
+        self.assertIn("fast-research-filter-setup", index)
+        self.assertIn("fast-research-filter-asset", index)
         self.assertIn("fast-research-filter-status", index)
+        self.assertIn("fast-research-family-body", index)
+        self.assertIn("fast-research-setup-body", index)
+        self.assertIn("fast-research-asset-body", index)
+        self.assertIn("fast-research-rejections-body", index)
         self.assertIn("strategy-lab-asset-meta", index)
         self.assertIn("strategy-lab-asset-body", index)
+        self.assertEqual(getattr(favicon, "status", None), 204)
         self.assertEqual(overview["monitor"]["status"], "waiting_for_history")
         self.assertIn("market", overview)
         self.assertIn("trade_analytics", overview)
@@ -503,6 +530,9 @@ class DashboardAppTests(unittest.TestCase):
                                 "strategy_id": "micro_orb",
                                 "label": "Micro ORB",
                                 "family": "opening_range_breakout",
+                                "setup_type": "opening_range_breakout_micro",
+                                "asset": "BTC",
+                                "pair": "XBTEUR",
                                 "status": "eligible",
                                 "score": 91.4,
                                 "win_rate": 0.67,
@@ -514,6 +544,9 @@ class DashboardAppTests(unittest.TestCase):
                                 "strategy_id": "trend_continuation_pullback",
                                 "label": "Trend Pullback",
                                 "family": "trend_continuation",
+                                "setup_type": "trend_continuation_pullback_micro",
+                                "asset": "SOL",
+                                "pair": "SOLEUR",
                                 "status": "watch",
                                 "score": 84.2,
                                 "win_rate": 0.61,
@@ -525,6 +558,9 @@ class DashboardAppTests(unittest.TestCase):
                                 "strategy_id": "failed_breakout_reclaim",
                                 "label": "Failed Breakout Reclaim",
                                 "family": "mean_reversion",
+                                "setup_type": "failed_breakout_reclaim_micro",
+                                "asset": "ETH",
+                                "pair": "ETHEUR",
                                 "status": "watch",
                                 "score": 76.8,
                                 "win_rate": 0.55,
@@ -534,13 +570,13 @@ class DashboardAppTests(unittest.TestCase):
                             },
                         ],
                         "experiments": [
-                            {"label": "Fast ORB 50EUR", "status": "complete", "net_pnl_eur": 1.8},
-                            {"label": "Trend Pullback 100EUR", "status": "running", "net_pnl_eur": 0.4},
-                            {"label": "Failed Reclaim 250EUR", "status": "complete", "net_pnl_eur": -0.2},
+                            {"label": "Fast ORB 50EUR", "status": "complete", "asset": "BTC", "setup_type": "opening_range_breakout_micro", "net_pnl_eur": 1.8},
+                            {"label": "Trend Pullback 100EUR", "status": "running", "asset": "SOL", "setup_type": "trend_continuation_pullback_micro", "net_pnl_eur": 0.4},
+                            {"label": "Failed Reclaim 250EUR", "status": "complete", "asset": "ETH", "setup_type": "failed_breakout_reclaim_micro", "net_pnl_eur": -0.2},
                         ],
                         "micro_signals": [
-                            {"label": "BTC 5s compression", "regime_label": "high_volatility"},
-                            {"label": "SOL 1s absorption", "regime_label": "trend"},
+                            {"label": "BTC 5s compression", "regime_label": "high_volatility", "asset": "BTC", "pair": "XBTEUR", "setup_type": "opening_range_breakout_micro"},
+                            {"label": "SOL 1s absorption", "regime_label": "trend", "asset": "SOL", "pair": "SOLEUR", "setup_type": "trend_continuation_pullback_micro"},
                         ],
                         "signals": {
                             "observed": 12,

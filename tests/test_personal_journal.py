@@ -8,6 +8,8 @@ from daytrading_bot.personal_journal import (
     build_personal_journal_payload,
     build_personal_trade_entry,
     ensure_personal_journal_path,
+    list_personal_journal_presets,
+    resolve_personal_journal_preset,
     run_personal_journal_report,
 )
 
@@ -85,6 +87,13 @@ class PersonalJournalTests(unittest.TestCase):
         self.assertIn("title", payload["strategy_notes"][0])
         self.assertIn("detail", payload["learning_points"][0])
         self.assertIsInstance(payload["beginner_notes"][0], dict)
+        self.assertTrue(summary.setup_families)
+        self.assertTrue(summary.venues)
+        self.assertTrue(summary.timeframes)
+        self.assertTrue(summary.recommendations)
+        self.assertTrue(payload["presets"])
+        self.assertEqual(payload["setup_families"][0]["label"], "swing")
+        self.assertEqual(payload["timeframe_breakdown"][0]["label"], "4H")
 
     def test_ensure_personal_journal_creates_empty_file(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
@@ -92,6 +101,49 @@ class PersonalJournalTests(unittest.TestCase):
             created = ensure_personal_journal_path(path)
             self.assertTrue(created.exists())
             self.assertEqual(created.read_text(encoding="utf-8"), "")
+
+    def test_personal_journal_presets_are_dashboard_friendly(self) -> None:
+        presets = list_personal_journal_presets()
+
+        self.assertGreaterEqual(len(presets), 4)
+        self.assertIn("preset_id", presets[0])
+        self.assertIn("strategy_name", presets[0])
+        self.assertIn("beginner_hint", presets[0])
+        self.assertTrue(any(preset["preset_id"] == "sol_swing_4h" for preset in presets))
+        self.assertTrue(any(preset["preset_id"] == "btc_micro_1m" for preset in presets))
+
+    def test_build_personal_trade_entry_can_fill_from_preset(self) -> None:
+        entry = build_personal_trade_entry(
+            preset_id="sol_swing_4h",
+            market="",
+            instrument="",
+            venue="",
+            side="",
+            strategy_name="",
+            setup_family="",
+            timeframe="",
+            status="",
+            entry_ts="2026-03-30T08:00:00+00:00",
+            exit_ts="2026-03-30T12:00:00+00:00",
+            entry_price=120.0,
+            exit_price=126.0,
+            pnl_eur=14.5,
+            pnl_pct=3.2,
+            fees_eur=0.6,
+            size_notional_eur=100.0,
+            confidence_before=62,
+            confidence_after=74,
+            lesson="Trend hat sauber getragen",
+            notes="Plan eingehalten",
+        )
+
+        self.assertEqual(entry.instrument, "SOL")
+        self.assertEqual(entry.strategy_name, "manual_swing")
+        self.assertEqual(entry.timeframe, "4H")
+        self.assertIn("sol", [tag.lower() for tag in entry.tags])
+
+    def test_resolve_personal_journal_preset_returns_none_for_unknown(self) -> None:
+        self.assertIsNone(resolve_personal_journal_preset("does_not_exist"))
 
 
 if __name__ == "__main__":

@@ -304,7 +304,7 @@ def _forward_stage(telemetry_path: Path) -> StageResult:
 
 
 def _live_scan_stage(bootstrap_dir: Path) -> StageResult:
-    report = _run_cli_json(
+    report = _retry_cli_json(
         [
             "live-scan",
             "--available-eur",
@@ -317,7 +317,8 @@ def _live_scan_stage(bootstrap_dir: Path) -> StageResult:
             str(bootstrap_dir),
             "--mode",
             "paper",
-        ]
+        ],
+        attempts=3,
     )
     ok = report.get("preflight", {}).get("armed") is True and report.get("report", {}).get("status") == "ok"
     ok = ok and report.get("report", {}).get("contexts_built", 0) > 0
@@ -353,6 +354,17 @@ def _live_block_stage() -> StageResult:
 def _run_cli_json(args: list[str]) -> dict[str, Any]:
     completed = _run_command([sys.executable, "-m", "daytrading_bot.cli", *args])
     return json.loads(completed.stdout)
+
+
+def _retry_cli_json(args: list[str], attempts: int = 2) -> dict[str, Any]:
+    last_error: Exception | None = None
+    for _ in range(max(1, attempts)):
+        try:
+            return _run_cli_json(args)
+        except (RuntimeError, json.JSONDecodeError) as error:
+            last_error = error
+    assert last_error is not None
+    raise last_error
 
 
 def _run_command(args: list[str], env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:

@@ -8,6 +8,132 @@ from pathlib import Path
 from typing import Any
 
 
+PERSONAL_JOURNAL_PRESETS: tuple[dict[str, Any], ...] = (
+    {
+        "preset_id": "sol_swing_4h",
+        "label": "SOL Swing 4H",
+        "market": "crypto",
+        "instrument": "SOL",
+        "venue": "Kraken",
+        "side": "long",
+        "strategy_name": "manual_swing",
+        "setup_family": "swing",
+        "timeframe": "4H",
+        "status": "closed",
+        "tags": ["crypto", "sol", "swing"],
+        "beginner_hint": "Nutze das fuer normale Solana-Swingtrades mit wenigen klaren Entscheidungen.",
+    },
+    {
+        "preset_id": "doge_momentum_1h",
+        "label": "DOGE Momentum 1H",
+        "market": "crypto",
+        "instrument": "DOGE",
+        "venue": "Kraken",
+        "side": "long",
+        "strategy_name": "manual_momentum",
+        "setup_family": "momentum",
+        "timeframe": "1H",
+        "status": "closed",
+        "tags": ["crypto", "doge", "momentum"],
+        "beginner_hint": "Sinnvoll fuer schnellere Dogecoin-Bewegungen, bei denen du Ein- und Ausstieg enger dokumentieren willst.",
+    },
+    {
+        "preset_id": "fet_reclaim_1h",
+        "label": "FET Reclaim 1H",
+        "market": "crypto",
+        "instrument": "FET",
+        "venue": "Kraken",
+        "side": "long",
+        "strategy_name": "manual_reclaim",
+        "setup_family": "reclaim",
+        "timeframe": "1H",
+        "status": "closed",
+        "tags": ["crypto", "fet", "reclaim"],
+        "beginner_hint": "Gedacht fuer Fetch.ai-Reclaims oder Trend-Wiederaufnahmen mit klarem Invalidierungsniveau.",
+    },
+    {
+        "preset_id": "crypto_swing",
+        "label": "Crypto Swing",
+        "market": "crypto",
+        "venue": "Kraken",
+        "side": "long",
+        "strategy_name": "manual_swing",
+        "setup_family": "swing",
+        "timeframe": "4H",
+        "status": "closed",
+        "tags": ["crypto", "swing"],
+        "beginner_hint": "Nutze diesen Preset fuer ruhigere Solana-, Dogecoin- oder Fetch-Swingtrades.",
+    },
+    {
+        "preset_id": "crypto_position",
+        "label": "Crypto Position",
+        "market": "crypto",
+        "venue": "Kraken",
+        "side": "long",
+        "strategy_name": "manual_position",
+        "setup_family": "position",
+        "timeframe": "1D",
+        "status": "closed",
+        "tags": ["crypto", "position"],
+        "beginner_hint": "Sinnvoll fuer laenger gehaltene Positionen, bei denen du nur wenige Entscheidungen triffst.",
+    },
+    {
+        "preset_id": "micro_btc_gold",
+        "label": "BTC or Gold Micro",
+        "market": "fx",
+        "venue": "Broker",
+        "side": "long",
+        "strategy_name": "micro_trial",
+        "setup_family": "fast",
+        "timeframe": "1M",
+        "status": "closed",
+        "tags": ["micro", "fast"],
+        "beginner_hint": "Gedacht fuer sehr kurze BTC/USD- oder XAU/USD-Mikrotrades mit engem Review danach.",
+    },
+    {
+        "preset_id": "btc_micro_1m",
+        "label": "BTC Micro 1M",
+        "market": "fx",
+        "instrument": "BTCUSD",
+        "venue": "Broker",
+        "side": "long",
+        "strategy_name": "btc_micro_trial",
+        "setup_family": "fast",
+        "timeframe": "1M",
+        "status": "closed",
+        "tags": ["btc", "micro", "fast"],
+        "beginner_hint": "Fuer sehr kurze BTC/USD-Mikrotrades. Halte Lesson und Fehler hier besonders sauber fest.",
+    },
+    {
+        "preset_id": "xau_micro_1m",
+        "label": "XAU Micro 1M",
+        "market": "metals",
+        "instrument": "XAUUSD",
+        "venue": "Broker",
+        "side": "long",
+        "strategy_name": "xau_micro_trial",
+        "setup_family": "fast",
+        "timeframe": "1M",
+        "status": "closed",
+        "tags": ["gold", "micro", "fast"],
+        "beginner_hint": "Fuer kurze Gold-Mikrotrades. Vor allem Stop-Disziplin und Exit-Timing dokumentieren.",
+    },
+    {
+        "preset_id": "stocks_swing",
+        "label": "Stocks Swing",
+        "market": "stocks",
+        "venue": "Broker",
+        "side": "long",
+        "strategy_name": "equity_swing",
+        "setup_family": "swing",
+        "timeframe": "1D",
+        "status": "closed",
+        "tags": ["stocks", "swing"],
+        "beginner_hint": "Nutze das fuer normale Aktien-Swingtrades, damit diese Daten nicht mit Krypto vermischt werden.",
+    },
+)
+
+
 @dataclass(frozen=True)
 class PersonalTradeEntry:
     trade_id: str
@@ -50,10 +176,14 @@ class PersonalJournalSummary:
     average_hold_minutes: float | None
     markets: list[dict[str, Any]]
     instruments: list[dict[str, Any]]
+    venues: list[dict[str, Any]]
+    timeframes: list[dict[str, Any]]
     strategies: list[dict[str, Any]]
+    setup_families: list[dict[str, Any]]
     mistakes: list[dict[str, Any]]
     tags: list[dict[str, Any]]
     recent_trades: list[dict[str, Any]]
+    recommendations: list[dict[str, str]]
     beginner_summary: list[str]
 
 
@@ -125,6 +255,11 @@ def build_personal_journal_payload(summary: PersonalJournalSummary) -> dict[str,
             for row in summary.mistakes[:8]
         ],
         "asset_breakdown": [{"label": row["label"], "value": row["value"]} for row in summary.instruments[:10]],
+        "venue_breakdown": [{"label": row["label"], "value": row["value"]} for row in summary.venues[:10]],
+        "timeframe_breakdown": [{"label": row["label"], "value": row["value"]} for row in summary.timeframes[:10]],
+        "setup_families": [{"label": row["label"], "value": row["value"]} for row in summary.setup_families[:10]],
+        "recommendations": list(summary.recommendations),
+        "presets": list_personal_journal_presets(),
         "beginner_notes": [
             {
                 "term": "Journal insight",
@@ -133,6 +268,20 @@ def build_personal_journal_payload(summary: PersonalJournalSummary) -> dict[str,
             for line in summary.beginner_summary
         ],
     }
+
+
+def list_personal_journal_presets() -> list[dict[str, Any]]:
+    return [dict(preset) for preset in PERSONAL_JOURNAL_PRESETS]
+
+
+def resolve_personal_journal_preset(preset_id: str | None) -> dict[str, Any] | None:
+    if not preset_id:
+        return None
+    normalized = str(preset_id).strip().lower()
+    for preset in PERSONAL_JOURNAL_PRESETS:
+        if str(preset.get("preset_id") or "").lower() == normalized:
+            return dict(preset)
+    return None
 
 
 def ensure_personal_journal_path(path: Path) -> Path:
@@ -174,7 +323,20 @@ def build_personal_trade_entry(
     notes: str,
     tags: list[str] | tuple[str, ...] | None = None,
     mistakes: list[str] | tuple[str, ...] | None = None,
+    preset_id: str | None = None,
 ) -> PersonalTradeEntry:
+    preset = resolve_personal_journal_preset(preset_id)
+    market = str(market or (preset or {}).get("market") or "")
+    instrument = str(instrument or (preset or {}).get("instrument") or "")
+    venue = str(venue or (preset or {}).get("venue") or "")
+    side = str(side or (preset or {}).get("side") or "")
+    strategy_name = str(strategy_name or (preset or {}).get("strategy_name") or "")
+    setup_family = str(setup_family or (preset or {}).get("setup_family") or "")
+    timeframe = str(timeframe or (preset or {}).get("timeframe") or "")
+    status = str(status or (preset or {}).get("status") or "")
+    if preset and not tags:
+        tags = preset.get("tags")
+
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     entry_key = (entry_ts or "na").replace(":", "").replace("-", "").replace("T", "_").replace("+00:00", "z")
     trade_id = f"{market.lower()}_{instrument.lower().replace('/', '-')}_{entry_key}"
@@ -212,7 +374,10 @@ def run_personal_journal_report(path: Path) -> PersonalJournalSummary:
     open_trades = [entry for entry in entries if entry.status.lower() != "closed"]
     market_counter: Counter[str] = Counter()
     instrument_counter: Counter[str] = Counter()
+    venue_counter: Counter[str] = Counter()
+    timeframe_counter: Counter[str] = Counter()
     strategy_stats: dict[str, dict[str, float]] = defaultdict(lambda: {"trades": 0, "wins": 0, "losses": 0, "net_pnl": 0.0})
+    setup_family_counter: Counter[str] = Counter()
     mistake_counter: Counter[str] = Counter()
     tag_counter: Counter[str] = Counter()
     hold_minutes: list[float] = []
@@ -220,6 +385,9 @@ def run_personal_journal_report(path: Path) -> PersonalJournalSummary:
     for entry in entries:
         market_counter[entry.market] += 1
         instrument_counter[entry.instrument] += 1
+        venue_counter[entry.venue or "unknown"] += 1
+        timeframe_counter[entry.timeframe or "unknown"] += 1
+        setup_family_counter[entry.setup_family or "unknown"] += 1
         for tag in entry.tags:
             tag_counter[tag] += 1
         for mistake in entry.mistakes:
@@ -247,6 +415,21 @@ def run_personal_journal_report(path: Path) -> PersonalJournalSummary:
         net_pnl=net_pnl,
         mistake_counter=mistake_counter,
     )
+    recommendations = _build_recommendations(
+        closed_count=closed_count,
+        net_pnl=net_pnl,
+        strategy_rows=[
+            {
+                "label": label,
+                "trades": int(values["trades"]),
+                "win_rate": (values["wins"] / values["trades"]) if values["trades"] else 0.0,
+                "net_pnl_eur": round(values["net_pnl"], 4),
+            }
+            for label, values in sorted(strategy_stats.items(), key=lambda item: item[1]["net_pnl"], reverse=True)
+        ],
+        setup_family_rows=_counter_rows(setup_family_counter),
+        mistake_counter=mistake_counter,
+    )
 
     return PersonalJournalSummary(
         source_exists=path.exists(),
@@ -261,6 +444,8 @@ def run_personal_journal_report(path: Path) -> PersonalJournalSummary:
         average_hold_minutes=(round(sum(hold_minutes) / len(hold_minutes), 2) if hold_minutes else None),
         markets=_counter_rows(market_counter),
         instruments=_counter_rows(instrument_counter),
+        venues=_counter_rows(venue_counter),
+        timeframes=_counter_rows(timeframe_counter),
         strategies=[
             {
                 "label": label,
@@ -270,6 +455,7 @@ def run_personal_journal_report(path: Path) -> PersonalJournalSummary:
             }
             for label, values in sorted(strategy_stats.items(), key=lambda item: item[1]["net_pnl"], reverse=True)
         ],
+        setup_families=_counter_rows(setup_family_counter),
         mistakes=_counter_rows(mistake_counter),
         tags=_counter_rows(tag_counter),
         recent_trades=[
@@ -295,6 +481,7 @@ def run_personal_journal_report(path: Path) -> PersonalJournalSummary:
             }
             for entry in sorted(entries, key=lambda item: item.logged_at, reverse=True)[:15]
         ],
+        recommendations=recommendations,
         beginner_summary=beginner_summary,
     )
 
@@ -387,3 +574,76 @@ def _build_beginner_summary(
     else:
         items.append("Noch keine markierten Fehler im Journal. Das ist meist ein Zeichen fuer zu wenig Rueckschau, nicht fuer fehlerfreies Trading.")
     return items
+
+
+def _build_recommendations(
+    *,
+    closed_count: int,
+    net_pnl: float,
+    strategy_rows: list[dict[str, Any]],
+    setup_family_rows: list[dict[str, Any]],
+    mistake_counter: Counter[str],
+) -> list[dict[str, str]]:
+    recommendations: list[dict[str, str]] = []
+    if closed_count < 5:
+        recommendations.append(
+            {
+                "title": "Mehr Stichprobe sammeln",
+                "detail": "Dein persoenliches Journal ist noch klein. Einzelne Gewinne oder Verluste sind noch nicht belastbar.",
+                "action": "Erfasse mindestens 10 bis 15 sauber dokumentierte Trades, bevor du Muster umstellst.",
+                "severity": "info",
+            }
+        )
+    if net_pnl < 0:
+        recommendations.append(
+            {
+                "title": "Verlustphase zuerst stabilisieren",
+                "detail": f"Dein manuelles Journal liegt aktuell bei {net_pnl:.2f} EUR netto.",
+                "action": "Weniger neue Ideen gleichzeitig testen und zuerst die klarsten Fehlerquellen reduzieren.",
+                "severity": "warning",
+            }
+        )
+    weak_strategies = [row for row in strategy_rows if row["trades"] >= 2 and (row["net_pnl_eur"] < 0 or row["win_rate"] < 0.45)]
+    if weak_strategies:
+        weakest = weak_strategies[-1]
+        recommendations.append(
+            {
+                "title": f"Strategie '{weakest['label']}' ueberpruefen",
+                "detail": f"Trades {weakest['trades']} | Win Rate {weakest['win_rate'] * 100.0:.1f}% | Net {weakest['net_pnl_eur']:.2f} EUR.",
+                "action": "Diese Strategie entweder enger definieren oder vorerst nur im Paper-Modus weiter pruefen.",
+                "severity": "warning",
+            }
+        )
+    if setup_family_rows:
+        dominant = setup_family_rows[0]
+        if dominant["share"] >= 0.6:
+            recommendations.append(
+                {
+                    "title": f"Setup-Familie '{dominant['label']}' dominiert",
+                    "detail": f"{dominant['share'] * 100.0:.1f}% deiner manuellen Trades kommen aus einer Familie.",
+                    "action": "Pruefe, ob du dadurch Marktphasen zu einseitig spielst und andere gute Setups ignorierst.",
+                    "severity": "info",
+                }
+            )
+    if mistake_counter:
+        top_mistake, count = mistake_counter.most_common(1)[0]
+        recommendations.append(
+            {
+                "title": f"Top-Fehler: {top_mistake}",
+                "detail": f"Dieser Fehler wurde {count}x markiert.",
+                "action": "Baue fuer genau diesen Fehler eine feste Vorab-Checkliste oder einen harden Exit-Trigger.",
+                "severity": "critical" if count >= 3 else "warning",
+            }
+        )
+    profitable_strategies = [row for row in strategy_rows if row["trades"] >= 2 and row["net_pnl_eur"] > 0 and row["win_rate"] >= 0.5]
+    if profitable_strategies:
+        strongest = profitable_strategies[0]
+        recommendations.append(
+            {
+                "title": f"Staerkste manuelle Strategie: {strongest['label']}",
+                "detail": f"Trades {strongest['trades']} | Win Rate {strongest['win_rate'] * 100.0:.1f}% | Net {strongest['net_pnl_eur']:.2f} EUR.",
+                "action": "Diese Regeln explizit aufschreiben und mit dem Bot-Cockpit vergleichen statt nur aus dem Bauch zu handeln.",
+                "severity": "good",
+            }
+        )
+    return recommendations[:6]

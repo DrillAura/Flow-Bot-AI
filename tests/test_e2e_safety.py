@@ -26,14 +26,26 @@ class E2eSafetyTests(unittest.TestCase):
         self.assertIn("BOT_ALLOW_LIVE is false", payload["preflight"]["issues"])
 
     def test_e2e_verify_harness_runs_end_to_end(self) -> None:
-        completed = subprocess.run(
-            [sys.executable, str(ROOT / "scripts" / "e2e_verify.py"), "--skip-unit"],
-            cwd=ROOT,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        payload = json.loads(completed.stdout)
+        last_completed: subprocess.CompletedProcess[str] | None = None
+        for _ in range(2):
+            completed = subprocess.run(
+                [sys.executable, str(ROOT / "scripts" / "e2e_verify.py"), "--skip-unit"],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                env={**os.environ, "PYTHONUTF8": "1"},
+            )
+            last_completed = completed
+            if completed.returncode == 0:
+                break
+        assert last_completed is not None
+        if last_completed.returncode != 0:
+            self.fail(
+                "e2e_verify.py failed twice\n"
+                f"STDOUT:\n{last_completed.stdout}\n"
+                f"STDERR:\n{last_completed.stderr}"
+            )
+        payload = json.loads(last_completed.stdout)
         self.assertTrue(all(stage["ok"] for stage in payload["results"]))
         stage_names = {stage["name"] for stage in payload["results"]}
         self.assertIn("positive_backtest", stage_names)

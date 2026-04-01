@@ -217,6 +217,43 @@ class CliContractTests(unittest.TestCase):
         self.assertEqual(dashboard["status"], "ok")
         self.assertTrue(dashboard_path.exists())
 
+    def test_personal_journal_presets_contract(self) -> None:
+        payload = self._run_cli_json("personal-journal-presets")
+
+        self.assertIn("presets", payload)
+        self.assertGreaterEqual(len(payload["presets"]), 4)
+        self.assertIn("preset_id", payload["presets"][0])
+
+    def test_append_personal_trade_can_use_preset_contract(self) -> None:
+        journal_path = self.workdir / "personal_trades.jsonl"
+        payload = self._run_cli_json(
+            "append-personal-trade",
+            "--path",
+            str(journal_path),
+            "--preset",
+            "sol_swing_4h",
+            "--pnl-eur",
+            "12.5",
+            "--pnl-pct",
+            "2.8",
+            "--fees-eur",
+            "0.4",
+            "--entry-ts",
+            "2026-03-30T08:00:00+00:00",
+            "--exit-ts",
+            "2026-03-30T12:00:00+00:00",
+            "--entry-price",
+            "120",
+            "--exit-price",
+            "125",
+            "--size-notional-eur",
+            "100",
+        )
+
+        self.assertEqual(payload["instrument"], "SOL")
+        self.assertEqual(payload["strategy_name"], "manual_swing")
+        self.assertEqual(payload["timeframe"], "4H")
+
     def _run_cli_json(self, *args: str) -> dict:
         env = os.environ.copy()
         env["BOT_PAIRS"] = "XBTEUR,ETHEUR,SOLEUR"

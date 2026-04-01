@@ -17,7 +17,7 @@ class StrategyLabTests(unittest.TestCase):
         specs = build_strategy_specs()
         ids = {spec.strategy_id for spec in specs}
 
-        self.assertGreaterEqual(len(specs), 11)
+        self.assertGreaterEqual(len(specs), 13)
         self.assertIn("champion_breakout", ids)
         self.assertIn("mean_reversion_vwap", ids)
         self.assertIn("opening_range_breakout", ids)
@@ -26,6 +26,8 @@ class StrategyLabTests(unittest.TestCase):
         self.assertIn("fast_imbalance_scalp_tight", ids)
         self.assertIn("fast_liquidity_sweep_reclaim", ids)
         self.assertIn("fast_vwap_reclaim_scalp", ids)
+        self.assertIn("fast_failed_breakout_reclaim_micro", ids)
+        self.assertIn("fast_liquidity_sweep_reversal", ids)
         fast_specs = [spec for spec in specs if spec.family == "fast_trading"]
         self.assertTrue(all(not spec.promotion_allowed for spec in fast_specs))
 

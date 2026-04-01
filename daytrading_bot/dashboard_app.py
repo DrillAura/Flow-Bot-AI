@@ -23,12 +23,14 @@ from .personal_journal import (
     build_personal_journal_payload,
     build_personal_trade_entry,
     ensure_personal_journal_path,
+    list_personal_journal_presets,
     run_personal_journal_report,
 )
 from .reporting import run_forward_test_report
 from .shadow_portfolios import run_shadow_portfolio_report
 from .signal_observatory import run_signal_observatory_report
 from .storage import load_interval_candles
+from .strategy_lab import build_strategy_specs
 from .workflows import run_history_status, run_monitor_supervisor
 
 
@@ -446,8 +448,31 @@ def build_personal_journal_overview(raw_payload: dict[str, Any] | None) -> dict[
     strategy_notes = [_normalize_journal_learning_entry(entry, fallback_title="Strategy note") for entry in (payload.get("strategy_notes") or []) if isinstance(entry, (dict, str))]
     learning_points = [_normalize_journal_learning_entry(entry, fallback_title="Learning point") for entry in (payload.get("learning_points") or []) if isinstance(entry, (dict, str))]
     asset_breakdown = [entry for entry in (payload.get("asset_breakdown") or []) if isinstance(entry, dict)]
+    setup_families = [entry for entry in (payload.get("setup_families") or []) if isinstance(entry, dict)]
     kpis = summary.get("kpis") if isinstance(summary.get("kpis"), list) else []
+    recommendations = [_normalize_journal_learning_entry(entry, fallback_title="Recommendation") for entry in (payload.get("recommendations") or []) if isinstance(entry, (dict, str))]
+    presets = [entry for entry in (payload.get("presets") or list_personal_journal_presets()) if isinstance(entry, dict)]
     beginner_notes = [_normalize_journal_learning_entry(entry, fallback_title="Beginner note") for entry in (payload.get("beginner_notes") or []) if isinstance(entry, (dict, str))]
+    preset_guide = [
+        {
+            "preset_id": str(preset.get("preset_id") or preset.get("label") or f"preset-{index}"),
+            "label": str(preset.get("label") or preset.get("preset_id") or "Preset"),
+            "market": str(preset.get("market") or "unknown"),
+            "setup_family": str(preset.get("setup_family") or "n/a"),
+            "timeframe": str(preset.get("timeframe") or "n/a"),
+            "beginner_hint": str(preset.get("beginner_hint") or "Hier ist ein einfacher Startpunkt fuer deinen manuellen Trade."),
+            "tags": [str(tag) for tag in (preset.get("tags") or []) if tag],
+        }
+        for index, preset in enumerate(presets[:8])
+    ]
+    beginner_hints = [
+        {
+            "title": item.get("title") or item.get("term") or "Beginner hint",
+            "detail": item.get("detail") or item.get("simple") or "n/a",
+            "takeaway": item.get("takeaway") or item.get("reason") or item.get("category") or "",
+        }
+        for item in (preset_guide[:4] + beginner_notes[:4])
+    ]
     recent_activity = entries[:8]
     return {
         "source_exists": bool(payload),
@@ -470,12 +495,18 @@ def build_personal_journal_overview(raw_payload: dict[str, Any] | None) -> dict[
         "strategy_notes": strategy_notes,
         "learning_points": learning_points,
         "asset_breakdown": asset_breakdown,
+        "setup_families": setup_families,
+        "recommendations": recommendations,
+        "presets": presets,
+        "preset_guide": preset_guide,
+        "beginner_hints": beginner_hints,
         "beginner_notes": beginner_notes,
         "recent_activity": recent_activity,
         "filter_options": {
             "assets": sorted({str(entry.get("asset") or "").upper() for entry in entries if entry.get("asset")} ),
             "strategies": sorted({str(entry.get("strategy") or "").strip() for entry in entries if entry.get("strategy")} ),
             "tags": sorted({str(tag) for entry in entries for tag in (entry.get("tags") or []) if tag}),
+            "setup_families": sorted({str(entry.get("setup_family") or "").strip() for entry in entries if entry.get("setup_family")} ),
         },
         "charts": {
             "pnl_series": [float(entry.get("pnl_eur") or 0.0) for entry in entries][-30:],
@@ -501,6 +532,116 @@ def build_fast_research_lab_overview(
     strategy_lab_payload = strategy_lab if isinstance(strategy_lab, dict) else {}
     champion = str(payload.get("champion_strategy_id") or strategy_lab_payload.get("current_paper_strategy_id") or "n/a")
     live_candidate = str(payload.get("live_candidate_strategy_id") or strategy_lab_payload.get("current_live_strategy_id") or "n/a")
+
+    def _normalized_label(row: dict[str, Any], keys: tuple[str, ...], fallback: str) -> str:
+        for key in keys:
+            value = row.get(key)
+            if value not in (None, ""):
+                return str(value).strip()
+        return fallback
+
+    family_groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    setup_groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    asset_groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in strategies:
+        family_key = _normalized_label(row, ("family",), "unknown")
+        setup_key = _normalized_label(row, ("setup_type", "strategy_type", "strategy_id", "label"), "unknown")
+        asset_key = _normalized_label(row, ("asset", "pair", "symbol", "market"), "")
+        family_groups[family_key].append(row)
+        setup_groups[setup_key].append(row)
+        if asset_key:
+            asset_groups[asset_key.upper()].append(row)
+
+    def _comparison_rows(groups: dict[str, list[dict[str, Any]]], kind: str) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for key, grouped_rows in groups.items():
+            if not grouped_rows:
+                continue
+            strategies_seen = len(grouped_rows)
+            eligible = sum(1 for row in grouped_rows if bool(row.get("eligible_for_promotion")))
+            scores = [float(row.get("score") or 0.0) for row in grouped_rows]
+            win_rates = [float(row.get("win_rate") or 0.0) for row in grouped_rows]
+            expectancies = [float(row.get("expectancy_eur") or 0.0) for row in grouped_rows]
+            best_row = max(grouped_rows, key=lambda row: float(row.get("score") or 0.0))
+            asset_count = len({
+                _normalized_label(row, ("asset", "pair", "symbol", "market"), "").upper()
+                for row in grouped_rows
+                if _normalized_label(row, ("asset", "pair", "symbol", "market"), "")
+            })
+            rows.append(
+                {
+                    kind: key,
+                    "strategies": strategies_seen,
+                    "eligible": eligible,
+                    "avg_score": sum(scores) / len(scores) if scores else 0.0,
+                    "avg_win_rate": sum(win_rates) / len(win_rates) if win_rates else 0.0,
+                    "avg_expectancy_eur": sum(expectancies) / len(expectancies) if expectancies else 0.0,
+                    "best_strategy": str(best_row.get("label") or best_row.get("strategy_id") or "n/a"),
+                    "best_score": float(best_row.get("score") or 0.0),
+                    "asset_count": asset_count,
+                    "rejections": max(strategies_seen - eligible, 0),
+                    "status": "eligible" if eligible == strategies_seen and strategies_seen else "watch",
+                }
+            )
+        rows.sort(key=lambda row: (row["avg_score"], row["strategies"]), reverse=True)
+        return rows
+
+    family_comparison = _comparison_rows(family_groups, "family")
+    setup_comparison = _comparison_rows(setup_groups, "setup")
+    asset_comparison = _comparison_rows(asset_groups, "asset")
+    if not asset_comparison and micro_signals:
+        signal_asset_groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for row in micro_signals:
+            asset_key = _normalized_label(row, ("asset", "pair", "symbol", "market"), "")
+            if asset_key:
+                signal_asset_groups[asset_key.upper()].append(row)
+        asset_comparison = []
+        for asset_key, grouped_rows in signal_asset_groups.items():
+            if not grouped_rows:
+                continue
+            strategies_seen = len(grouped_rows)
+            tradable = sum(1 for row in grouped_rows if bool(row.get("tradable")))
+            best_row = max(grouped_rows, key=lambda row: float(row.get("score") or (1.0 if row.get("tradable") else 0.0)))
+            setup_label = _normalized_label(best_row, ("setup_type", "strategy_type", "label", "regime_label", "strategy_id"), "micro")
+            asset_comparison.append(
+                {
+                    "asset": asset_key,
+                    "setup": setup_label,
+                    "strategies": strategies_seen,
+                    "eligible": tradable,
+                    "avg_score": sum(float(row.get("score") or (1.0 if row.get("tradable") else 0.0)) for row in grouped_rows) / strategies_seen,
+                    "avg_win_rate": 0.0,
+                    "avg_expectancy_eur": 0.0,
+                    "best_strategy": str(best_row.get("label") or best_row.get("strategy_id") or asset_key),
+                    "best_score": float(best_row.get("score") or (1.0 if best_row.get("tradable") else 0.0)),
+                    "asset_count": 1,
+                    "rejections": max(strategies_seen - tradable, 0),
+                    "status": "eligible" if tradable == strategies_seen and strategies_seen else "watch",
+                }
+            )
+        asset_comparison.sort(key=lambda row: (row["strategies"], row["avg_score"]), reverse=True)
+    rejection_leaderboard = sorted(
+        [
+            {
+                "strategy_id": str(row.get("strategy_id") or row.get("label") or "n/a"),
+                "label": str(row.get("label") or row.get("strategy_id") or "n/a"),
+                "family": str(row.get("family") or "unknown"),
+                "setup": _normalized_label(row, ("setup_type", "strategy_type", "strategy_id", "label"), "unknown"),
+                "asset": _normalized_label(row, ("asset", "pair", "symbol", "market"), "n/a").upper(),
+                "score": float(row.get("score") or 0.0),
+                "win_rate": float(row.get("win_rate") or 0.0),
+                "expectancy_eur": float(row.get("expectancy_eur") or 0.0),
+                "status": str(row.get("status") or ("eligible" if row.get("eligible_for_promotion") else "watch")),
+                "notes": str(row.get("notes") or ""),
+                "reason": str(row.get("notes") or row.get("status") or "waiting_for_evidence"),
+                "rejection_pressure": max(0.0, 100.0 - float(row.get("score") or 0.0)),
+            }
+            for row in strategies
+            if not bool(row.get("eligible_for_promotion")) or str(row.get("status") or "").lower() not in {"eligible", "promoted", "live"}
+        ],
+        key=lambda row: (row["rejection_pressure"], row["score"]),
+        reverse=True,
+    )
     return {
         "source_exists": bool(payload),
         "updated_at": payload.get("updated_at"),
@@ -520,8 +661,28 @@ def build_fast_research_lab_overview(
         "micro_signals": micro_signals,
         "filter_options": {
             "families": sorted({str(row.get("family") or "") for row in strategies if row.get("family")} ),
+            "setups": sorted({
+                _normalized_label(row, ("setup_type", "strategy_type", "strategy_id", "label"), "")
+                for row in strategies
+                if _normalized_label(row, ("setup_type", "strategy_type", "strategy_id", "label"), "")
+            }),
+            "assets": sorted({
+                _normalized_label(row, ("asset", "pair", "symbol", "market"), "").upper()
+                for row in strategies
+                if _normalized_label(row, ("asset", "pair", "symbol", "market"), "")
+            }),
             "statuses": sorted({str(row.get("status") or "") for row in experiments if row.get("status")} ),
             "regimes": sorted({str(row.get("regime_label") or "") for row in micro_signals if row.get("regime_label")} ),
+        },
+        "family_comparison": family_comparison,
+        "setup_comparison": setup_comparison,
+        "asset_comparison": asset_comparison,
+        "rejection_leaderboard": rejection_leaderboard,
+        "compare_summary": {
+            "families": len(family_comparison),
+            "setups": len(setup_comparison),
+            "assets": len(asset_comparison),
+            "rejections": len(rejection_leaderboard),
         },
         "ranking": sorted(
             [
@@ -732,7 +893,7 @@ def build_trade_analytics(bot_config: BotConfig, telemetry_path: Path) -> dict[s
             "mae_mfe_points": [],
             "recent_trades": [],
             "all_trades": [],
-            "filter_options": {"pairs": [], "qualities": [], "reasons": [], "setups": [], "limits": [12, 25, 50, 100]},
+            "filter_options": {"pairs": [], "assets": [], "qualities": [], "reasons": [], "setups": [], "limits": [12, 25, 50, 100]},
             "summary": {
                 "closed_trades": 0,
                 "net_pnl_eur": 0.0,
@@ -867,6 +1028,7 @@ def build_trade_analytics(bot_config: BotConfig, telemetry_path: Path) -> dict[s
             {
                 "trade_key": f"{open_trade['pair']}|{event_ts.isoformat()}|{reason}|{round(pnl, 4)}",
                 "pair": open_trade["pair"],
+                "asset": str(open_trade["pair"] or "").upper().replace("EUR", "").replace("USD", ""),
                 "entry_ts": open_trade["entry_ts"].isoformat(),
                 "exit_ts": event_ts.isoformat(),
                 "pnl_eur": round(pnl, 4),
@@ -905,6 +1067,7 @@ def build_trade_analytics(bot_config: BotConfig, telemetry_path: Path) -> dict[s
     avg_hold_minutes = (hold_minutes_total / closed_trades) if closed_trades else 0.0
     avg_pnl_per_trade = (cumulative_pnl / closed_trades) if closed_trades else 0.0
     pairs = sorted({trade["pair"] for trade in recent_trades})
+    assets = sorted({trade["asset"] for trade in recent_trades if trade.get("asset")})
     qualities = sorted({trade["quality"] for trade in recent_trades})
     reasons = sorted({trade["reason"] for trade in recent_trades})
     setups = sorted({trade["setup_type"] for trade in recent_trades})
@@ -952,6 +1115,7 @@ def build_trade_analytics(bot_config: BotConfig, telemetry_path: Path) -> dict[s
         "all_trades": recent_trades[-250:][::-1],
         "filter_options": {
             "pairs": pairs,
+            "assets": assets,
             "qualities": qualities,
             "reasons": reasons,
             "setups": setups,
@@ -1117,6 +1281,45 @@ def build_copilot_overview(
 
 def build_strategy_lab_overview(strategy_lab: dict[str, Any]) -> dict[str, Any]:
     strategies = list(strategy_lab.get("strategies") or [])
+    existing_ids = {str(row.get("strategy_id") or "") for row in strategies if isinstance(row, dict)}
+    for spec in build_strategy_specs():
+        if spec.strategy_id in existing_ids:
+            continue
+        strategies.append(
+            {
+                "strategy_id": spec.strategy_id,
+                "label": spec.label,
+                "family": spec.family,
+                "strategy_type": spec.strategy_type,
+                "closed_trades": 0,
+                "wins": 0,
+                "losses": 0,
+                "win_rate": 0.0,
+                "profit_factor": 0.0,
+                "expectancy_eur": 0.0,
+                "net_pnl_eur": 0.0,
+                "max_drawdown_pct": 0.0,
+                "average_hold_minutes": 0.0,
+                "distinct_regimes": 0,
+                "dominant_regime_share": 0.0,
+                "distinct_assets": 0,
+                "dominant_asset_share": 0.0,
+                "score": 0.0,
+                "gates": {
+                    "promotion_allowed": {
+                        "name": "promotion_allowed",
+                        "passed": bool(spec.promotion_allowed),
+                        "actual": bool(spec.promotion_allowed),
+                        "threshold": "paper_only" if not spec.promotion_allowed else "promotion_allowed",
+                    }
+                },
+                "eligible_for_promotion": False,
+                "latest_activity_ts": None,
+                "regime_breakdown": [],
+                "asset_breakdown": [],
+                "setup_breakdown": [],
+            }
+        )
     eligible = [row for row in strategies if bool(row.get("eligible_for_promotion"))]
     ranked_scores = [
         {
@@ -1236,7 +1439,7 @@ def build_dashboard_overview(
         personal_journal_payload = build_personal_journal_payload(run_personal_journal_report(personal_journal_path))
     fast_research_payload = state_payload.get("fast_research_lab") if isinstance(state_payload, dict) else None
     if not isinstance(fast_research_payload, dict) or not fast_research_payload:
-        fast_research_payload = build_fast_research_lab_payload(strategy_lab_payload if isinstance(strategy_lab_payload, dict) else {}, telemetry_path)
+        fast_research_payload = build_fast_research_lab_payload(strategy_lab if isinstance(strategy_lab, dict) else {}, telemetry_path)
     personal_journal = build_personal_journal_overview(personal_journal_payload)
     fast_research_lab = build_fast_research_lab_overview(
         fast_research_payload,
@@ -1341,6 +1544,11 @@ def serve_dashboard_app(
                 return
             if self.path == "/healthz":
                 self._send_json({"ok": True, "ts": datetime.now(timezone.utc).isoformat()})
+                return
+            if self.path == "/favicon.ico":
+                self.send_response(204)
+                self.send_header("Cache-Control", "public, max-age=86400")
+                self.end_headers()
                 return
             self.send_error(404, "Not Found")
 
@@ -1678,11 +1886,13 @@ def render_dashboard_app_html(overview: dict[str, Any]) -> str:
     .panel {{ padding: 18px; }}
     .panel-header {{ display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 10px; }}
     .panel h2 {{ margin: 0; font-size: 16px; letter-spacing: 0.01em; }}
-    .panel-subtitle {{ color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.12em; }}
+    .panel-subtitle {{ color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.12em; overflow-wrap: anywhere; }}
+    .list-item strong {{ line-height: 1.25; overflow-wrap: anywhere; }}
+    .list-item span {{ line-height: 1.45; overflow-wrap: anywhere; }}
     table {{ width: 100%; border-collapse: collapse; }}
     th, td {{ padding: 10px 8px; text-align: left; border-bottom: 1px solid var(--line); font-size: 13px; vertical-align: top; }}
     th {{ color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.12em; }}
-    .path {{ font-family: "Cascadia Code", Consolas, monospace; color: #cad7e2; word-break: break-all; font-size: 12px; }}
+    .path {{ font-family: "Cascadia Code", Consolas, monospace; color: #cad7e2; word-break: break-all; font-size: 12px; overflow-wrap: anywhere; }}
     .footer {{ color: var(--muted); font-size: 12px; text-align: right; padding: 2px 4px 0; }}
     .layout-equal {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }}
     .market-grid {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }}
@@ -1804,6 +2014,9 @@ def render_dashboard_app_html(overview: dict[str, Any]) -> str:
     .action-btn.export {{ color: #8cc9ff; }}
     .action-btn.clear {{ color: var(--amber); }}
     .journal-kpis {{ display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 12px; }}
+    .list-item.clickable, .comparison-table tr.clickable {{ cursor: pointer; transition: background 140ms ease, border-color 140ms ease, transform 140ms ease; }}
+    .list-item.clickable:hover, .comparison-table tr.clickable:hover {{ background: rgba(255,255,255,0.03); transform: translateY(-1px); }}
+    .comparison-table tr.selected {{ background: rgba(98,184,255,0.08); }}
     .trade-list-item.selected {{ border-color: rgba(98,184,255,0.4); background: rgba(98,184,255,0.10); }}
     .trade-list-item {{ cursor: pointer; transition: background 140ms ease, border-color 140ms ease, transform 140ms ease; }}
     .trade-list-item:hover {{ transform: translateY(-1px); border-color: rgba(255,255,255,0.12); }}
@@ -1815,6 +2028,8 @@ def render_dashboard_app_html(overview: dict[str, Any]) -> str:
     .marker-hit {{ cursor: pointer; transition: transform 120ms ease; }}
     .marker-hit:hover {{ transform: scale(1.08); }}
     .highlight-note {{ color: #8cc9ff; font-size: 12px; }}
+    .compact-empty {{ color: var(--muted); font-size: 12px; line-height: 1.5; padding: 10px 12px; border-radius: 14px; border: 1px dashed rgba(255,255,255,0.08); background: rgba(255,255,255,0.02); }}
+    .compact-empty strong {{ color: var(--text); }}
     .inline-dot {{ width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 8px; background: var(--amber); box-shadow: 0 0 0 0 rgba(244,178,79,0.45); animation: pulse 2s infinite; }}
     .inline-dot.good {{ background: var(--green); box-shadow: 0 0 0 0 rgba(56,211,159,0.45); }}
     .inline-dot.bad {{ background: var(--red); box-shadow: 0 0 0 0 rgba(255,109,109,0.45); }}
@@ -1822,6 +2037,8 @@ def render_dashboard_app_html(overview: dict[str, Any]) -> str:
     @media (max-width: 1240px) {{ .journal-kpis, .detail-grid, .portfolio-grid {{ grid-template-columns: 1fr 1fr; }} }}
     @media (max-width: 1240px) {{ .market-grid, .phase-track, .layout-equal {{ grid-template-columns: 1fr 1fr; }} .hero-grid, .layout {{ grid-template-columns: 1fr; }} }}
     @media (max-width: 1080px) {{ .hero-grid, .layout, .layout-equal {{ grid-template-columns: 1fr; }} .metric-grid, .market-grid, .phase-track, .journal-kpis, .detail-grid, .portfolio-grid {{ grid-template-columns: 1fr; }} .ring {{ width: 190px; height: 190px; }} .chart-toolbar {{ align-items: stretch; }} }}
+    @media (max-width: 900px) {{ .journal-form-grid {{ grid-template-columns: 1fr 1fr; }} .filter-row {{ gap: 8px; }} .filter-control {{ min-width: 0; }} .asset-sidebar-list {{ max-height: 540px; }} }}
+    @media (max-width: 720px) {{ .journal-form-grid {{ grid-template-columns: 1fr; }} .filter-control textarea {{ min-height: 72px; }} .market-symbol {{ font-size: 20px; }} .market-price {{ font-size: 28px; }} }}
   </style>
 </head>
 <body>
@@ -1986,7 +2203,17 @@ def render_dashboard_app_html(overview: dict[str, Any]) -> str:
         </div>
         <div style="height:12px"></div>
         <div class="panel-subtitle">Neuen manuellen Trade lokal eintragen. Das landet nur in deinem persoenlichen Journal auf diesem Geraet.</div>
+        <div class="chart-toolbar">
+          <div class="toolbar-group">
+            <div class="toolbar-label">Preset guide</div>
+            <span class="highlight-note">Click a preset card to prefill the journal form.</span>
+          </div>
+          <div class="toolbar-group">
+            <span class="highlight-note">Beginner hints stay local and never change the bot runtime.</span>
+          </div>
+        </div>
         <div class="journal-form-grid">
+          <div class="filter-control"><label for="journal-form-preset">Preset</label><select id="journal-form-preset"></select></div>
           <div class="filter-control"><label for="journal-form-market">Market</label><select id="journal-form-market"><option value="crypto">crypto</option><option value="stocks">stocks</option><option value="fx">fx</option><option value="metals">metals</option><option value="other">other</option></select></div>
           <div class="filter-control"><label for="journal-form-instrument">Instrument</label><input id="journal-form-instrument" type="text" placeholder="z. B. SOL, BTCUSD, XAUUSD" /></div>
           <div class="filter-control"><label for="journal-form-venue">Venue</label><input id="journal-form-venue" type="text" placeholder="Kraken, Broker, Bybit ..." /></div>
@@ -2015,11 +2242,18 @@ def render_dashboard_app_html(overview: dict[str, Any]) -> str:
           <button id="journal-form-submit" class="quick-filter-btn active" type="button">Save trade to journal</button>
         </div>
         <div class="chart-shell">
+          <div class="chart"><div class="chart-caption"><span>Preset guide</span><span id="journal-preset-guide-meta">n/a</span></div><div class="list" id="journal-preset-guide"></div></div>
+          <div class="chart"><div class="chart-caption"><span>Beginner hints</span><span id="journal-beginner-hints-meta">n/a</span></div><div class="list" id="journal-beginner-hints"></div></div>
+        </div>
+        <div style="height:12px"></div>
+        <div class="chart-shell">
           <div class="chart"><div class="chart-caption"><span>Journal PnL and confidence</span><span id="personal-journal-chart-meta">n/a</span></div><div id="personal-journal-pnl-chart"></div><div style="height:12px"></div><div id="personal-journal-confidence-chart"></div></div>
           <div class="chart"><div class="chart-caption"><span>Journal learning and asset mix</span><span id="personal-journal-breakdown-meta">n/a</span></div><div id="personal-journal-winloss-chart"></div><div style="height:12px"></div><div id="personal-journal-asset-chart"></div></div>
         </div>
         <div style="height:12px"></div>
         <div class="list" id="personal-journal-entry-list"></div>
+        <div style="height:12px"></div>
+        <div class="list" id="personal-journal-recommendation-list"></div>
         <div style="height:12px"></div>
         <div class="list" id="personal-journal-learning-list"></div>
       </section>
@@ -2031,6 +2265,8 @@ def render_dashboard_app_html(overview: dict[str, Any]) -> str:
         <div style="height:12px"></div>
         <div class="filter-row">
           <div class="filter-control"><label for="fast-research-filter-family">Family</label><select id="fast-research-filter-family"></select></div>
+          <div class="filter-control"><label for="fast-research-filter-setup">Setup</label><select id="fast-research-filter-setup"></select></div>
+          <div class="filter-control"><label for="fast-research-filter-asset">Asset</label><select id="fast-research-filter-asset"></select></div>
           <div class="filter-control"><label for="fast-research-filter-status">Status</label><select id="fast-research-filter-status"></select></div>
         </div>
         <div class="chart-shell">
@@ -2039,6 +2275,16 @@ def render_dashboard_app_html(overview: dict[str, Any]) -> str:
         </div>
         <div style="height:12px"></div>
         <div class="list" id="fast-research-card-list"></div>
+        <div style="height:12px"></div>
+        <div class="chart-shell">
+          <div class="chart"><div class="chart-caption"><span>Family compare</span><span id="fast-research-family-meta">n/a</span></div><table class="comparison-table"><thead><tr><th>Family</th><th>Strategies</th><th>Eligible</th><th>Avg Score</th><th>Best</th></tr></thead><tbody id="fast-research-family-body"></tbody></table></div>
+          <div class="chart"><div class="chart-caption"><span>Setup compare</span><span id="fast-research-setup-meta">n/a</span></div><table class="comparison-table"><thead><tr><th>Setup</th><th>Strategies</th><th>Eligible</th><th>Avg Score</th><th>Best</th></tr></thead><tbody id="fast-research-setup-body"></tbody></table></div>
+        </div>
+        <div style="height:12px"></div>
+        <div class="chart-shell">
+          <div class="chart"><div class="chart-caption"><span>Asset vs Setup</span><span id="fast-research-asset-meta">n/a</span></div><table class="comparison-table"><thead><tr><th>Asset</th><th>Setup</th><th>Strategies</th><th>Avg Exp.</th><th>Best</th></tr></thead><tbody id="fast-research-asset-body"></tbody></table></div>
+          <div class="chart"><div class="chart-caption"><span>Rejection leaderboard</span><span id="fast-research-rejections-meta">n/a</span></div><table class="comparison-table"><thead><tr><th>Strategy</th><th>Family</th><th>Setup</th><th>Asset</th><th>Reason</th></tr></thead><tbody id="fast-research-rejections-body"></tbody></table></div>
+        </div>
       </section>
     </section>
     <section class="panel">
@@ -2196,6 +2442,8 @@ def render_dashboard_app_html(overview: dict[str, Any]) -> str:
         journalStrategy: 'all',
         journalTag: 'all',
         fastResearchFamily: 'all',
+        fastResearchSetup: 'all',
+        fastResearchAsset: 'all',
         fastResearchStatus: 'all',
         marketSymbol: 'all',
         marketTimeframe: '1D',
@@ -2246,6 +2494,11 @@ def render_dashboard_app_html(overview: dict[str, Any]) -> str:
         hour: '2-digit',
         minute: '2-digit',
       }});
+    }}
+    function shortText(value, limit = 120) {{
+      const text = fmtText(value);
+      if (text === 'n/a' || text.length <= limit) return text;
+      return `${{text.slice(0, Math.max(limit - 1, 16)).trimEnd()}}…`;
     }}
     function pillClassFromText(value) {{
       const text = String(value || '').toLowerCase();
@@ -2594,34 +2847,68 @@ def render_dashboard_app_html(overview: dict[str, Any]) -> str:
       return `<svg viewBox="0 0 ${{width}} ${{height}}" preserveAspectRatio="none"><defs><linearGradient id="market-area-${{escapeHtml(String(title || 'series'))}}" x1="0" x2="0" y1="0" y2="1"><stop offset="0%" stop-color="${{stroke}}" stop-opacity="0.30"></stop><stop offset="100%" stop-color="${{stroke}}" stop-opacity="0.02"></stop></linearGradient></defs>${{guides}}<path d="${{areaPath}}" fill="url(#market-area-${{escapeHtml(String(title || 'series'))}})"></path><path d="${{path}}" fill="none" stroke="${{stroke}}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"></path>${{points.slice(0, 1).map(point => `<circle cx="${{point.x.toFixed(2)}}" cy="${{point.y.toFixed(2)}}" r="4.5" fill="${{stroke}}"></circle>`).join('')}}<circle cx="${{points[points.length - 1].x.toFixed(2)}}" cy="${{points[points.length - 1].y.toFixed(2)}}" r="4.5" fill="${{stroke}}"></circle></svg>`;
     }}
     function journalFormPayload() {{
-      const valueOf = id => {{
-        const node = document.getElementById(id);
-        return node ? node.value : '';
-      }};
       return {{
-        market: valueOf('journal-form-market'),
-        instrument: valueOf('journal-form-instrument'),
-        venue: valueOf('journal-form-venue'),
-        side: valueOf('journal-form-side'),
-        strategy_name: valueOf('journal-form-strategy'),
-        setup_family: valueOf('journal-form-setup-family'),
-        timeframe: valueOf('journal-form-timeframe'),
-        status: valueOf('journal-form-status'),
-        entry_ts: normalizeJournalDate(valueOf('journal-form-entry-ts')),
-        exit_ts: normalizeJournalDate(valueOf('journal-form-exit-ts')),
-        entry_price: normalizeOptionalNumber(valueOf('journal-form-entry-price')),
-        exit_price: normalizeOptionalNumber(valueOf('journal-form-exit-price')),
-        pnl_eur: Number(valueOf('journal-form-pnl-eur') || 0),
-        pnl_pct: normalizeOptionalNumber(valueOf('journal-form-pnl-pct')),
-        size_notional_eur: normalizeOptionalNumber(valueOf('journal-form-size')),
-        confidence_before: normalizeOptionalInt(valueOf('journal-form-confidence-before')),
-        confidence_after: normalizeOptionalInt(valueOf('journal-form-confidence-after')),
-        fees_eur: Number(valueOf('journal-form-fees') || 0),
-        tags: valueOf('journal-form-tags'),
-        mistakes: valueOf('journal-form-mistakes'),
-        lesson: valueOf('journal-form-lesson'),
-        notes: valueOf('journal-form-notes'),
+        market: valueOfNode('journal-form-market'),
+        instrument: valueOfNode('journal-form-instrument'),
+        venue: valueOfNode('journal-form-venue'),
+        side: valueOfNode('journal-form-side'),
+        strategy_name: valueOfNode('journal-form-strategy'),
+        setup_family: valueOfNode('journal-form-setup-family'),
+        timeframe: valueOfNode('journal-form-timeframe'),
+        status: valueOfNode('journal-form-status'),
+        entry_ts: normalizeJournalDate(valueOfNode('journal-form-entry-ts')),
+        exit_ts: normalizeJournalDate(valueOfNode('journal-form-exit-ts')),
+        entry_price: normalizeOptionalNumber(valueOfNode('journal-form-entry-price')),
+        exit_price: normalizeOptionalNumber(valueOfNode('journal-form-exit-price')),
+        pnl_eur: Number(valueOfNode('journal-form-pnl-eur') || 0),
+        pnl_pct: normalizeOptionalNumber(valueOfNode('journal-form-pnl-pct')),
+        size_notional_eur: normalizeOptionalNumber(valueOfNode('journal-form-size')),
+        confidence_before: normalizeOptionalInt(valueOfNode('journal-form-confidence-before')),
+        confidence_after: normalizeOptionalInt(valueOfNode('journal-form-confidence-after')),
+        fees_eur: Number(valueOfNode('journal-form-fees') || 0),
+        tags: valueOfNode('journal-form-tags'),
+        mistakes: valueOfNode('journal-form-mistakes'),
+        lesson: valueOfNode('journal-form-lesson'),
+        notes: valueOfNode('journal-form-notes'),
       }};
+    }}
+    function valueOfNode(id) {{
+      const node = document.getElementById(id);
+      return node ? node.value : '';
+    }}
+    function setNodeValue(id, value) {{
+      const node = document.getElementById(id);
+      if (!node) return;
+      node.value = value ?? '';
+    }}
+    function renderJournalPresetOptions(presets) {{
+      const select = document.getElementById('journal-form-preset');
+      if (!select) return;
+      const rows = Array.isArray(presets) ? presets : [];
+      const current = select.value || '';
+      select.innerHTML = `<option value="">Manual entry</option>${{rows.map(preset => `<option value="${{escapeHtml(String(preset.preset_id || ''))}}">${{escapeHtml(String(preset.label || preset.preset_id || 'Preset'))}}</option>`).join('')}}`;
+      if ([...select.options].some(option => option.value === current)) {{
+        select.value = current;
+      }}
+    }}
+    function applyJournalPreset(overview) {{
+      const journal = overview.personal_journal || {{}};
+      const presetId = valueOfNode('journal-form-preset');
+      const preset = (journal.presets || []).find(item => String(item.preset_id || '') === String(presetId || ''));
+      if (!preset) return;
+      setNodeValue('journal-form-market', preset.market || 'crypto');
+      setNodeValue('journal-form-venue', preset.venue || '');
+      setNodeValue('journal-form-side', preset.side || 'long');
+      setNodeValue('journal-form-strategy', preset.strategy_name || '');
+      setNodeValue('journal-form-setup-family', preset.setup_family || '');
+      setNodeValue('journal-form-timeframe', preset.timeframe || '');
+      setNodeValue('journal-form-status', preset.status || 'closed');
+      setNodeValue('journal-form-tags', Array.isArray(preset.tags) ? preset.tags.join(',') : '');
+      const statusNode = document.getElementById('journal-form-status');
+      if (statusNode) {{
+        statusNode.textContent = preset.beginner_hint || `Preset loaded: ${{preset.label || preset.preset_id}}`;
+        statusNode.className = 'journal-form-status';
+      }}
     }}
     function normalizeOptionalNumber(value) {{
       if (value === null || value === undefined || value === '') return null;
@@ -2679,6 +2966,8 @@ def render_dashboard_app_html(overview: dict[str, Any]) -> str:
         ['journal-filter-strategy', 'journalStrategy'],
         ['journal-filter-tag', 'journalTag'],
         ['fast-research-filter-family', 'fastResearchFamily'],
+        ['fast-research-filter-setup', 'fastResearchSetup'],
+        ['fast-research-filter-asset', 'fastResearchAsset'],
         ['fast-research-filter-status', 'fastResearchStatus'],
       ].forEach(([id, key]) => {{
         const node = document.getElementById(id);
@@ -2798,6 +3087,24 @@ def render_dashboard_app_html(overview: dict[str, Any]) -> str:
           submitJournalEntry();
         }});
       }}
+      const journalPresetSelect = document.getElementById('journal-form-preset');
+      if (journalPresetSelect) {{
+        journalPresetSelect.addEventListener('change', () => {{
+          applyJournalPreset(dashboardState.overview || {{}});
+        }});
+      }}
+      const journalPresetGuide = document.getElementById('journal-preset-guide');
+      if (journalPresetGuide) {{
+        journalPresetGuide.addEventListener('click', event => {{
+          const item = event.target.closest('[data-journal-preset]');
+          if (!item || !item.dataset.journalPreset) return;
+          const select = document.getElementById('journal-form-preset');
+          if (select) {{
+            select.value = item.dataset.journalPreset;
+          }}
+          applyJournalPreset(dashboardState.overview || {{}});
+        }});
+      }}
       const clearButton = document.getElementById('clear-trade-selection-button');
       if (clearButton) {{
         clearButton.addEventListener('click', () => {{
@@ -2805,6 +3112,18 @@ def render_dashboard_app_html(overview: dict[str, Any]) -> str:
           if (dashboardState.overview) renderTradeDetail(dashboardState.overview);
         }});
       }}
+      ['fast-research-card-list', 'fast-research-family-body', 'fast-research-setup-body', 'fast-research-asset-body', 'fast-research-rejections-body'].forEach(id => {{
+        const node = document.getElementById(id);
+        if (!node) return;
+        node.addEventListener('click', event => {{
+          const row = event.target.closest('[data-fast-family], [data-fast-setup], [data-fast-asset]');
+          if (!row) return;
+          if (row.dataset.fastFamily) dashboardState.filters.fastResearchFamily = row.dataset.fastFamily;
+          if (row.dataset.fastSetup) dashboardState.filters.fastResearchSetup = row.dataset.fastSetup;
+          if (row.dataset.fastAsset) dashboardState.filters.fastResearchAsset = row.dataset.fastAsset;
+          if (dashboardState.overview) renderOverview(dashboardState.overview);
+        }});
+      }});
       ['equity-chart', 'pnl-chart', 'mae-mfe-chart'].forEach(id => {{
         const node = document.getElementById(id);
         if (!node) return;
@@ -2960,18 +3279,101 @@ def render_dashboard_app_html(overview: dict[str, Any]) -> str:
     function filteredFastResearchLab(lab) {{
       const activeFamily = dashboardState.filters.fastResearchFamily || 'all';
       const activeStatus = dashboardState.filters.fastResearchStatus || 'all';
+      const activeSetup = dashboardState.filters.fastResearchSetup || 'all';
+      const activeAsset = dashboardState.filters.fastResearchAsset || 'all';
       const strategies = (lab.strategies || []).filter(row => {{
         const family = String(row.family || '').trim();
         const status = String(row.status || (row.eligible_for_promotion ? 'eligible' : 'watch')).trim();
-        return (activeFamily === 'all' || family === activeFamily) && (activeStatus === 'all' || status === activeStatus);
+        const setup = normalizeToken(row.setup_type || row.strategy_type || row.strategy_id || row.label || '');
+        const asset = normalizeToken(row.asset || row.pair || row.symbol || row.market || '');
+        return (activeFamily === 'all' || family === activeFamily) &&
+          (activeStatus === 'all' || status === activeStatus) &&
+          (activeSetup === 'all' || setup === normalizeToken(activeSetup)) &&
+          (activeAsset === 'all' || asset === normalizeToken(activeAsset));
       }});
-      const experiments = (lab.experiments || []).filter(row => (activeStatus === 'all' || String(row.status || '').trim() === activeStatus));
+      const experiments = (lab.experiments || []).filter(row => {{
+        const status = String(row.status || '').trim();
+        const setup = normalizeToken(row.setup_type || row.strategy_type || row.strategy_id || row.label || '');
+        const asset = normalizeToken(row.asset || row.pair || row.symbol || row.market || '');
+        return (activeStatus === 'all' || status === activeStatus) &&
+          (activeSetup === 'all' || setup === normalizeToken(activeSetup)) &&
+          (activeAsset === 'all' || asset === normalizeToken(activeAsset));
+      }});
       const ranking = strategies.slice().sort((a, b) => Number(b.score || 0) - Number(a.score || 0));
       return {{
         activeFamily,
         activeStatus,
+        activeSetup,
+        activeAsset,
         strategies: ranking,
         experiments,
+      }};
+    }}
+    function fastResearchComparisonRows(rows) {{
+      const familyMap = new Map();
+      const setupMap = new Map();
+      const assetMap = new Map();
+      const rejections = [];
+      (rows || []).forEach(row => {{
+        const family = String(row.family || 'unknown').trim() || 'unknown';
+        const setup = String(row.setup_type || row.strategy_type || row.strategy_id || row.label || 'unknown').trim() || 'unknown';
+        const asset = String(row.asset || row.pair || row.symbol || row.market || '').trim().toUpperCase();
+        const score = Number(row.score || 0);
+        const winRate = Number(row.win_rate || 0);
+        const expectancy = Number(row.expectancy_eur || 0);
+        const eligible = Boolean(row.eligible_for_promotion);
+        const target = {{
+          strategy_id: String(row.strategy_id || row.label || 'n/a'),
+          label: String(row.label || row.strategy_id || 'n/a'),
+          family,
+          setup,
+          asset: asset || 'n/a',
+          score,
+          win_rate: winRate,
+          expectancy_eur: expectancy,
+          eligible,
+        }};
+        if (!familyMap.has(family)) familyMap.set(family, []);
+        familyMap.get(family).push(target);
+        if (!setupMap.has(setup)) setupMap.set(setup, []);
+        setupMap.get(setup).push(target);
+        if (asset) {{
+          if (!assetMap.has(asset)) assetMap.set(asset, []);
+          assetMap.get(asset).push(target);
+        }}
+        if (!eligible || String(row.status || '').toLowerCase() !== 'eligible') {{
+          rejections.push({{
+            ...target,
+            reason: String(row.notes || row.status || 'waiting_for_evidence'),
+            rejection_pressure: Math.max(0, 100 - score),
+          }});
+        }}
+      }});
+      const aggregate = (map, kind) => [...map.entries()].map(([label, grouped]) => {{
+        const strategies = grouped.length;
+        const eligible = grouped.filter(item => item.eligible).length;
+        const scores = grouped.map(item => Number(item.score || 0));
+        const expectancies = grouped.map(item => Number(item.expectancy_eur || 0));
+        const best = grouped.slice().sort((a, b) => Number(b.score || 0) - Number(a.score || 0))[0] || {{}};
+        return {{
+          [kind]: label,
+          strategies,
+          eligible,
+          avg_score: strategies ? scores.reduce((sum, value) => sum + value, 0) / strategies : 0,
+          avg_expectancy_eur: strategies ? expectancies.reduce((sum, value) => sum + value, 0) / strategies : 0,
+          best_strategy: best.label || best.strategy_id || 'n/a',
+          best_score: Number(best.score || 0),
+          avg_win_rate: strategies ? grouped.map(item => Number(item.win_rate || 0)).reduce((sum, value) => sum + value, 0) / strategies : 0,
+          asset_count: new Set(grouped.map(item => item.asset).filter(Boolean)).size,
+          rejections: Math.max(strategies - eligible, 0),
+        }};
+      }}).sort((left, right) => Number(right.avg_score || 0) - Number(left.avg_score || 0));
+      rejections.sort((left, right) => Number(right.rejection_pressure || 0) - Number(left.rejection_pressure || 0));
+      return {{
+        familyRows: aggregate(familyMap, 'family'),
+        setupRows: aggregate(setupMap, 'setup'),
+        assetRows: aggregate(assetMap, 'asset'),
+        rejectionRows: rejections,
       }};
     }}
     function filteredShadowData(shadow) {{
@@ -3002,6 +3404,9 @@ def render_dashboard_app_html(overview: dict[str, Any]) -> str:
       const journalView = filteredPersonalJournal(journal);
       const summary = journal.summary || {{}};
       const filterOptions = journal.filter_options || {{}};
+      renderJournalPresetOptions(journal.presets || []);
+      const presets = journal.preset_guide || [];
+      const hints = journal.beginner_hints || journal.beginner_notes || [];
       setSelectOptions('journal-filter-asset', filterOptions.assets || [], journalView.activeAsset, 'All assets');
       setSelectOptions('journal-filter-strategy', filterOptions.strategies || [], journalView.activeStrategy, 'All strategies');
       setSelectOptions('journal-filter-tag', filterOptions.tags || [], journalView.activeTag, 'All tags');
@@ -3021,22 +3426,45 @@ def render_dashboard_app_html(overview: dict[str, Any]) -> str:
       setText('personal-journal-breakdown-meta', `strategies ${{(filterOptions.strategies || []).length}} | tags ${{(filterOptions.tags || []).length}}`);
       setHTML('personal-journal-entry-list', journalView.entries.slice(0, 16).map(entry => `
         <div class="list-item">
-          <strong>${{escapeHtml(entry.title || entry.asset || entry.strategy || 'Journal Entry')}}</strong>
-          <span>${{escapeHtml(entry.entry_ts || entry.ts || 'n/a')}} | ${{escapeHtml(entry.asset || 'n/a')}} | ${{escapeHtml(entry.strategy || 'n/a')}}</span>
-          <span class="path">PnL ${{fmtNumber(entry.pnl_eur, 2)}} EUR | confidence ${{fmtPercent(Number(entry.confidence || 0) * 100)}} | source ${{escapeHtml(entry.source || 'manual')}}</span>
+          <strong>${{escapeHtml(shortText(entry.title || entry.asset || entry.strategy || 'Journal Entry', 42))}}</strong>
+          <span>${{escapeHtml(shortText(`${{entry.entry_ts || entry.ts || 'n/a'}} | ${{entry.asset || 'n/a'}} | ${{entry.strategy || 'n/a'}}`, 76))}}</span>
+          <span class="path">PnL ${{fmtNumber(entry.pnl_eur, 2)}} EUR | confidence ${{fmtPercent(Number(entry.confidence || 0) * 100)}} | source ${{escapeHtml(shortText(entry.source || 'manual', 20))}}</span>
         </div>
-      `).join('') || '<div class="list-item"><strong>No journal entries</strong><span>Wenn du spaeter manuelle Trades eintraegst, erscheinen sie hier mit PnL, Strategie und Lernnotizen.</span></div>');
+      `).join('') || '<div class="compact-empty"><strong>No journal entries yet.</strong> Manuelle Trades erscheinen hier mit PnL, Strategie, Learnings und Fehlern.</div>');
+      setText('journal-preset-guide-meta', `${{presets.length}} presets | click to fill`);
+      setText('journal-beginner-hints-meta', `${{hints.length}} simple hints | preset-aware`);
+      setHTML('journal-preset-guide', presets.map(item => `
+        <div class="list-item clickable" data-journal-preset="${{escapeHtml(item.preset_id || '')}}">
+          <strong>${{escapeHtml(shortText(item.label || item.preset_id || 'Preset', 40))}}</strong>
+          <span>${{escapeHtml(shortText(`${{item.market || 'n/a'}} | ${{item.setup_family || 'n/a'}} | ${{item.timeframe || 'n/a'}}`, 72))}}</span>
+          <span class="path">${{escapeHtml(shortText(item.beginner_hint || 'Use this preset to prefill the form.', 104))}}</span>
+        </div>
+      `).join('') || '<div class="compact-empty"><strong>No presets available.</strong> Die Preset-Liste laedt automatisch aus dem Journal-Backend.</div>');
+      setHTML('journal-beginner-hints', hints.map(item => `
+        <div class="list-item">
+          <strong>${{escapeHtml(shortText(item.title || item.term || 'Hint', 38))}}</strong>
+          <span>${{escapeHtml(shortText(item.detail || item.simple || 'n/a', 100))}}</span>
+          <span class="path">${{escapeHtml(shortText(item.takeaway || '', 96))}}</span>
+        </div>
+      `).join('') || '<div class="compact-empty"><strong>No beginner hints yet.</strong> Hier erscheinen einfache Erklaerungen, sobald Presets und Journal-Daten verfuegbar sind.</div>');
+      setHTML('personal-journal-recommendation-list', (journal.recommendations || []).slice(0, 8).map(item => `
+        <div class="list-item">
+          <strong>${{escapeHtml(shortText(item.title || 'Recommendation', 40))}}</strong>
+          <span>${{escapeHtml(shortText(item.detail || item.simple || 'n/a', 108))}}</span>
+          <span class="${{pillClassFromText(item.severity)}}">${{escapeHtml(shortText(item.action || item.takeaway || '', 92))}}</span>
+        </div>
+      `).join('') || '<div class="compact-empty"><strong>No recommendations yet.</strong> Sobald genug Journal-Daten vorliegen, erscheinen hier konkrete Lern- und Verbesserungsansaetze.</div>');
       setHTML('personal-journal-learning-list', [
         ...(journal.strategy_notes || []),
         ...(journal.learning_points || []),
         ...(journal.beginner_notes || []),
       ].slice(0, 12).map(item => `
         <div class="list-item">
-          <strong>${{escapeHtml(item.title || item.term || 'Learning')}}</strong>
-          <span>${{escapeHtml(item.detail || item.note || item.simple || 'n/a')}}</span>
-          <span class="path">${{escapeHtml(item.takeaway || item.reason || item.category || '')}}</span>
+          <strong>${{escapeHtml(shortText(item.title || item.term || 'Learning', 36))}}</strong>
+          <span>${{escapeHtml(shortText(item.detail || item.note || item.simple || 'n/a', 100))}}</span>
+          <span class="path">${{escapeHtml(shortText(item.takeaway || item.reason || item.category || '', 72))}}</span>
         </div>
-      `).join('') || '<div class="list-item"><strong>No learnings yet</strong><span>Hier werden spaeter deine Strategie-Notizen und Learnings gebuendelt.</span></div>');
+      `).join('') || '<div class="compact-empty"><strong>No learnings yet.</strong> Hier sammelt das Cockpit spaeter Strategie-Notizen und Trading-Learnings.</div>');
     }}
     function renderFastResearchSection(overview) {{
       const lab = overview.fast_research_lab || {{}};
@@ -3044,6 +3472,8 @@ def render_dashboard_app_html(overview: dict[str, Any]) -> str:
       const summary = lab.summary || {{}};
       const filterOptions = lab.filter_options || {{}};
       setSelectOptions('fast-research-filter-family', filterOptions.families || [], labView.activeFamily, 'All families');
+      setSelectOptions('fast-research-filter-setup', filterOptions.setups || [], labView.activeSetup, 'All setups');
+      setSelectOptions('fast-research-filter-asset', filterOptions.assets || [], labView.activeAsset, 'All assets');
       setSelectOptions('fast-research-filter-status', filterOptions.statuses || [], labView.activeStatus, 'All statuses');
       setHTML('fast-research-summary-grid', [
         ['Strategies', fmtText(summary.strategies_seen ?? labView.strategies.length)],
@@ -3060,15 +3490,32 @@ def render_dashboard_app_html(overview: dict[str, Any]) -> str:
         {{ label: 'Rejects', value: Number(lab.signals && lab.signals.micro_rejections || 0) * -1 }},
       ], 'rgba(98,184,255,0.88)'));
       setHTML('fast-research-experiments-chart', labeledBarChartSvg((lab.experiments || []).map(row => ({{ label: row.label || row.name || row.strategy_id || 'n/a', value: Number(row.net_pnl_eur || row.score || 0) }})), 'rgba(56,211,159,0.88)'));
-      setText('fast-research-ranking-meta', `${{labView.strategies.length}} strategies | family ${{labView.activeFamily}}`);
-      setText('fast-research-signals-meta', `${{(lab.signals && lab.signals.observed) || 0}} observed signals | status ${{fmtText(summary.status)}}`);
+      const comparisons = fastResearchComparisonRows(labView.strategies);
+      setText('fast-research-ranking-meta', `${{labView.strategies.length}} strategies | family ${{labView.activeFamily}} | setup ${{labView.activeSetup}} | asset ${{labView.activeAsset}}`);
+      setText('fast-research-signals-meta', `${{(lab.signals && lab.signals.observed) || 0}} observed signals | status ${{fmtText(summary.status)}} | rejects ${{comparisons.rejectionRows.length}}`);
       setHTML('fast-research-card-list', labView.strategies.slice(0, 12).map(row => `
-        <div class="list-item">
-          <strong>${{escapeHtml(row.label || row.strategy_id || 'n/a')}}</strong>
-          <span>${{escapeHtml(row.family || 'n/a')}} | ${{escapeHtml(row.status || 'watch')}} | score ${{fmtNumber(row.score, 2)}}</span>
-          <span class="path">PF ${{fmtNumber(row.profit_factor, 2)}} | WR ${{fmtPercent(Number(row.win_rate || 0) * 100)}} | expectancy ${{fmtNumber(row.expectancy_eur, 2)}} EUR</span>
+        <div class="list-item clickable" data-fast-family="${{escapeHtml(row.family || '')}}" data-fast-setup="${{escapeHtml(row.setup_type || row.strategy_type || row.strategy_id || row.label || '')}}" data-fast-asset="${{escapeHtml(row.asset || row.pair || row.symbol || row.market || '')}}">
+          <strong>${{escapeHtml(shortText(row.label || row.strategy_id || 'n/a', 34))}}</strong>
+          <span>${{escapeHtml(shortText(`${{row.family || 'n/a'}} | ${{row.status || 'watch'}} | score ${{fmtNumber(row.score, 2)}}`, 80))}}</span>
+          <span class="path">${{escapeHtml(shortText(`PF ${{fmtNumber(row.profit_factor, 2)}} | WR ${{fmtPercent(Number(row.win_rate || 0) * 100)}} | expectancy ${{fmtNumber(row.expectancy_eur, 2)}} EUR`, 92))}}</span>
         </div>
-      `).join('') || '<div class="list-item"><strong>No fast-research rows</strong><span>Die Fast-Trading-Lane erscheint hier, sobald die Backend-Daten bereitgestellt werden.</span></div>');
+      `).join('') || '<div class="compact-empty"><strong>No fast-research rows yet.</strong> Die Fast-Trading-Lane wird sichtbar, sobald Backend-Daten und Session-Telemetrie eintreffen.</div>');
+      setText('fast-research-family-meta', `${{comparisons.familyRows.length}} families | filters active`);
+      setText('fast-research-setup-meta', `${{comparisons.setupRows.length}} setups | filters active`);
+      setText('fast-research-asset-meta', `${{comparisons.assetRows.length}} assets | filters active`);
+      setText('fast-research-rejections-meta', `${{comparisons.rejectionRows.length}} rejected or watch rows`);
+      setHTML('fast-research-family-body', comparisons.familyRows.map(row => `
+        <tr class="clickable ${{row.family === labView.activeFamily ? 'selected' : ''}}" data-fast-family="${{escapeHtml(row.family)}}"><td><strong>${{escapeHtml(row.family)}}</strong></td><td>${{fmtText(row.strategies)}}</td><td>${{fmtText(row.eligible)}}</td><td>${{fmtNumber(row.avg_score, 2)}}</td><td>${{escapeHtml(shortText(row.best_strategy, 24))}}</td></tr>
+      `).join('') || '<tr><td colspan="5">No family comparison data yet. Sobald mehr strategische Evidence da ist, zeigt das Cockpit Families gegeneinander.</td></tr>');
+      setHTML('fast-research-setup-body', comparisons.setupRows.map(row => `
+        <tr class="clickable ${{normalizeToken(row.setup) === normalizeToken(labView.activeSetup) ? 'selected' : ''}}" data-fast-setup="${{escapeHtml(row.setup)}}"><td><strong>${{escapeHtml(shortText(row.setup, 28))}}</strong></td><td>${{fmtText(row.strategies)}}</td><td>${{fmtText(row.eligible)}}</td><td>${{fmtNumber(row.avg_score, 2)}}</td><td>${{escapeHtml(shortText(row.best_strategy, 24))}}</td></tr>
+      `).join('') || '<tr><td colspan="5">No setup comparison data yet. Der Setup-Drilldown erscheint nach den ersten Micro-/Paper-Evidenzen.</td></tr>');
+      setHTML('fast-research-asset-body', comparisons.assetRows.map(row => `
+        <tr class="clickable ${{normalizeToken(row.asset) === normalizeToken(labView.activeAsset) ? 'selected' : ''}}" data-fast-asset="${{escapeHtml(row.asset)}}"><td><strong>${{escapeHtml(row.asset)}}</strong></td><td>${{escapeHtml(shortText(row.setup, 28))}}</td><td>${{fmtText(row.strategies)}}</td><td>${{fmtNumber(row.avg_expectancy_eur, 2)}} EUR</td><td>${{escapeHtml(shortText(row.best_strategy, 24))}}</td></tr>
+      `).join('') || '<tr><td colspan="5">No asset-vs-setup comparison data yet. Dieses View wird erst hilfreich, wenn ein Strategy-Lab Asset-Cluster sichtbar wird.</td></tr>');
+      setHTML('fast-research-rejections-body', comparisons.rejectionRows.map(row => `
+        <tr class="clickable" data-fast-family="${{escapeHtml(row.family)}}" data-fast-setup="${{escapeHtml(row.setup)}}" data-fast-asset="${{escapeHtml(row.asset)}}"><td><strong>${{escapeHtml(shortText(row.label, 28))}}</strong></td><td>${{escapeHtml(row.family)}}</td><td>${{escapeHtml(shortText(row.setup, 24))}}</td><td>${{escapeHtml(row.asset)}}</td><td>${{escapeHtml(shortText(row.reason, 64))}}</td></tr>
+      `).join('') || '<tr><td colspan="5">No rejection rows yet. Wenn die Lane mehr Evidence sammelt, erscheint hier die Topliste der schwächsten oder noch geblockten Setups.</td></tr>');
     }}
     function renderJournalAlignmentSection(overview) {{
       const alignment = overview.journal_strategy_alignment || {{}};
@@ -3089,8 +3536,8 @@ def render_dashboard_app_html(overview: dict[str, Any]) -> str:
       setText('journal-alignment-asset-meta', `${{assetRows.length}} manual assets tracked`);
       setHTML('journal-alignment-family-body', familyRows.map(row => `<tr><td>${{escapeHtml(row.family)}}</td><td>${{fmtText(row.manual_trades)}}</td><td>${{fmtText(row.bot_strategies)}}</td><td>${{fmtText(row.eligible_strategies)}}</td><td>${{row.champion_present ? 'yes' : 'no'}}</td></tr>`).join('') || '<tr><td colspan="5">No family alignment data yet.</td></tr>');
       setHTML('journal-alignment-asset-body', assetRows.map(row => `<tr><td>${{escapeHtml(row.asset)}}</td><td>${{fmtText(row.manual_trades)}}</td><td>${{row.tracked_by_bot ? 'yes' : 'no'}}</td><td>${{row.fast_lane_seen ? 'yes' : 'no'}}</td></tr>`).join('') || '<tr><td colspan="4">No asset overlap data yet.</td></tr>');
-      setHTML('journal-alignment-guardrails', guardrails.map(row => `<div class="list-item"><strong>${{escapeHtml(row.mistake)}}</strong><span>${{escapeHtml(row.guardrail)}}</span><span class="path">count ${{fmtText(row.count)}}</span></div>`).join('') || '<div class="list-item"><strong>No mapped mistakes yet</strong><span>Wenn du im Journal Fehler markierst, verknuepft das Cockpit sie hier mit Bot-Guardrails.</span></div>');
-      setHTML('journal-alignment-beginner', beginnerNotes.map(row => `<div class="list-item"><strong>${{escapeHtml(row.term || 'Hint')}}</strong><span>${{escapeHtml(row.simple || row.detail || 'n/a')}}</span></div>`).join('') || '<div class="list-item"><strong>No beginner notes yet</strong><span>Die Journal-vs-Bot-Erklaerungen erscheinen hier, sobald Daten vorliegen.</span></div>');
+      setHTML('journal-alignment-guardrails', guardrails.map(row => `<div class="list-item"><strong>${{escapeHtml(shortText(row.mistake, 28))}}</strong><span>${{escapeHtml(shortText(row.guardrail, 104))}}</span><span class="path">count ${{fmtText(row.count)}}</span></div>`).join('') || '<div class="compact-empty"><strong>No mapped mistakes yet.</strong> Sobald du Fehler im Journal markierst, ordnet das Cockpit passende Guardrails zu.</div>');
+      setHTML('journal-alignment-beginner', beginnerNotes.map(row => `<div class="list-item"><strong>${{escapeHtml(shortText(row.term || 'Hint', 30))}}</strong><span>${{escapeHtml(shortText(row.simple || row.detail || 'n/a', 104))}}</span></div>`).join('') || '<div class="compact-empty"><strong>No beginner notes yet.</strong> Die einfachen Erklaerungen erscheinen, sobald manuelle Daten vorliegen.</div>');
     }}
     function renderShadowSection(overview) {{
       const shadow = overview.shadow_portfolios || {{}};
@@ -3225,7 +3672,8 @@ def render_dashboard_app_html(overview: dict[str, Any]) -> str:
       setHTML('strategy-lab-score-chart', labeledBarChartSvg(lab.ranked_scores || [], 'rgba(255, 179, 71, 0.92)'));
       setText('strategy-lab-meta', `${{rows.length}} strategies | current champion ${{lab.current_paper_strategy_id || 'n/a'}}`);
       setText('strategy-lab-gate-meta', `paper promoted = ${{fmtText(lab.paper_promotion_applied)}} | rollback = ${{fmtText(lab.rollback_applied)}} | live promoted = ${{fmtText(lab.live_promotion_applied)}}`);
-      setHTML('strategy-lab-body', rows.map(row => `<tr><td>${{escapeHtml(row.label || row.strategy_id || 'n/a')}}</td><td>${{escapeHtml(row.family || 'n/a')}}</td><td>${{fmtText(row.closed_trades)}}</td><td>${{row.profit_factor === 'inf' ? 'inf' : fmtNumber(row.profit_factor, 2)}}</td><td>${{fmtPercent(Number(row.win_rate || 0) * 100)}}</td><td><span class="chip ${{row.eligible_for_promotion ? 'good' : 'warn'}}">${{row.eligible_for_promotion ? 'eligible' : 'hold'}}</span></td></tr>`).join('') || '<tr><td colspan="6">Noch keine Strategy-Lab-Daten vorhanden.</td></tr>');
+      const sparseEvidence = rows.length > 0 && rows.every(row => Number(row.closed_trades || 0) === 0 && Number(row.score || 0) === 0 && Number(row.win_rate || 0) === 0);
+      setHTML('strategy-lab-body', rows.map(row => `<tr><td>${{escapeHtml(shortText(row.label || row.strategy_id || 'n/a', 34))}}</td><td>${{escapeHtml(shortText(row.family || 'n/a', 24))}}</td><td>${{fmtText(row.closed_trades)}}</td><td>${{row.profit_factor === 'inf' ? 'inf' : fmtNumber(row.profit_factor, 2)}}</td><td>${{fmtPercent(Number(row.win_rate || 0) * 100)}}</td><td><span class="chip ${{row.eligible_for_promotion ? 'good' : 'warn'}}">${{row.eligible_for_promotion ? 'eligible' : 'hold'}}</span></td></tr>`).join('') || '<tr><td colspan="6">No strategy-lab data yet.</td></tr>');
       const regimeRows = rows.map(row => {{
         const gates = row.gates || {{}};
         const failed = Object.values(gates).filter(gate => gate && gate.passed === false).map(gate => gate.name);
@@ -3234,8 +3682,8 @@ def render_dashboard_app_html(overview: dict[str, Any]) -> str:
         const dominantShare = Number(row.dominant_regime_share || 0);
         return `<tr><td>${{escapeHtml(row.label || row.strategy_id || 'n/a')}}</td><td>${{fmtText(distinctRegimes)}}</td><td>${{fmtPercent(dominantShare * 100)}}</td><td><span class="chip ${{regimeGatePassed ? 'good' : 'warn'}}">${{regimeGatePassed ? 'stable' : 'thin'}}</span></td><td>${{escapeHtml(failed.join(', ') || 'none')}}</td></tr>`;
       }});
-      setText('strategy-lab-regime-meta', `${{rows.length}} strategies | distinct regime and concentration gates`);
-      setHTML('strategy-lab-regime-body', regimeRows.join('') || '<tr><td colspan="5">Noch keine Regime-Gates sichtbar.</td></tr>');
+      setText('strategy-lab-regime-meta', `${{rows.length}} strategies | regime gates`);
+      setHTML('strategy-lab-regime-body', sparseEvidence ? '<tr><td colspan="5">No closed paper trades yet. Regime gates will become meaningful after the first evidence arrives.</td></tr>' : (regimeRows.join('') || '<tr><td colspan="5">No regime-gate data yet.</td></tr>'));
       const assetRows = rows.map(row => {{
         const gates = row.gates || {{}};
         const failed = ['distinct_assets', 'asset_trade_depth', 'asset_concentration']
@@ -3247,8 +3695,8 @@ def render_dashboard_app_html(overview: dict[str, Any]) -> str:
         const dominantShare = Number(row.dominant_asset_share || 0);
         return `<tr><td>${{escapeHtml(row.label || row.strategy_id || 'n/a')}}</td><td>${{fmtText(distinctAssets)}}</td><td>${{fmtPercent(dominantShare * 100)}}</td><td><span class="chip ${{assetGatePassed ? 'good' : 'warn'}}">${{assetGatePassed ? 'broad' : 'thin'}}</span></td><td>${{escapeHtml(failed.join(', ') || 'none')}}</td></tr>`;
       }});
-      setText('strategy-lab-asset-meta', `${{rows.length}} strategies | distinct asset and concentration gates`);
-      setHTML('strategy-lab-asset-body', assetRows.join('') || '<tr><td colspan="5">Noch keine Asset-Gates sichtbar.</td></tr>');
+      setText('strategy-lab-asset-meta', `${{rows.length}} strategies | asset gates`);
+      setHTML('strategy-lab-asset-body', sparseEvidence ? '<tr><td colspan="5">No closed paper trades yet. Asset gates will become meaningful after the first evidence arrives.</td></tr>' : (assetRows.join('') || '<tr><td colspan="5">No asset-gate data yet.</td></tr>'));
     }}
     function renderTradeDetail(overview) {{
       const tradeAnalytics = overview.trade_analytics || {{}};
@@ -3337,12 +3785,12 @@ def render_dashboard_app_html(overview: dict[str, Any]) -> str:
         ['Exit', fmtDateTime(focusedTrade.exit_ts)],
       ].map(([label, value]) => `<div class="mini-metric"><div class="label">${{escapeHtml(label)}}</div><div class="value">${{escapeHtml(value)}}</div></div>`).join('') : '<div class="mini-metric"><div class="label">Selection</div><div class="value">No trade selected</div></div>');
       setHTML('selected-trade-notes', focusedTrade ? [
-        `<div class="list-item"><strong>Exit interpretation</strong><span>${{escapeHtml(summarizeReason(focusedTrade.reason))}}</span></div>`,
-        `<div class="list-item"><strong>Beginner view</strong><span>${{escapeHtml(selectedPnl >= 0 ? 'Dieser Trade hat Geld verdient. Schau auf Pair, Setup und Exit-Grund, um Muster guter Trades zu finden.' : 'Dieser Trade hat Geld verloren. Das ist nur dann problematisch, wenn dieselben Muster haeufig wiederkommen.' )}}</span></div>`,
-        `<div class="list-item"><strong>Execution profile</strong><span>Entry ${{escapeHtml(focusedTrade.entry_liquidity_role || 'n/a')}} bei ${{fmtNumber(focusedTrade.entry_slippage_bps, 2)}} bps Slippage. Exit ${{escapeHtml(focusedTrade.exit_liquidity_role || 'n/a')}} bei ${{fmtNumber(focusedTrade.exit_slippage_bps, 2)}} bps.</span></div>`,
-        `<div class="list-item"><strong>Replay focus</strong><span>Aktueller Drilldown basiert auf Pair ${{escapeHtml(focusedTrade.pair)}} und Setup ${{escapeHtml(focusedTrade.setup_type || 'n/a')}}. Mit den Filtern oben kannst du das Replay pro Asset und Setup eingrenzen.</span></div>`,
-        `<div class="list-item"><strong>Reason code</strong><span class="path">${{escapeHtml(focusedTrade.reason_code || 'n/a')}}</span></div>`,
-      ].join('') : '<div class="list-item"><strong>Selection guide</strong><span>Waehle einen Marker oder einen Journal-Eintrag aus, um den einzelnen Trade zu erklaeren und im Kontext der Charts zu sehen.</span></div>');
+        `<div class="list-item"><strong>Exit interpretation</strong><span>${{escapeHtml(shortText(summarizeReason(focusedTrade.reason), 120))}}</span></div>`,
+        `<div class="list-item"><strong>Beginner view</strong><span>${{escapeHtml(shortText(selectedPnl >= 0 ? 'Gewinntrades helfen dir, das richtige Paar-, Setup- und Exit-Muster zu erkennen.' : 'Verluste sind vor allem dann wichtig, wenn sich dasselbe Muster wiederholt.', 116))}}</span></div>`,
+        `<div class="list-item"><strong>Execution profile</strong><span>${{escapeHtml(shortText(`Entry ${{focusedTrade.entry_liquidity_role || 'n/a'}} bei ${{fmtNumber(focusedTrade.entry_slippage_bps, 2)}} bps Slippage. Exit ${{focusedTrade.exit_liquidity_role || 'n/a'}} bei ${{fmtNumber(focusedTrade.exit_slippage_bps, 2)}} bps.`, 122))}}</span></div>`,
+        `<div class="list-item"><strong>Replay focus</strong><span>${{escapeHtml(shortText(`Pair ${{focusedTrade.pair}} | Setup ${{focusedTrade.setup_type || 'n/a'}} | Filter oben fuer mehr Details.`, 118))}}</span></div>`,
+        `<div class="list-item"><strong>Reason code</strong><span class="path">${{escapeHtml(shortText(focusedTrade.reason_code || 'n/a', 72))}}</span></div>`,
+      ].join('') : '<div class="compact-empty"><strong>Select a trade.</strong> Klick auf einen Marker oder einen Journal-Eintrag, um den Trade im Kontext zu sehen.</div>');
     }}
     function renderOverview(overview) {{
       dashboardState.overview = overview;
@@ -3449,13 +3897,13 @@ def render_dashboard_app_html(overview: dict[str, Any]) -> str:
       setText('pnl-chart-meta', `net pnl = ${{fmtNumber(tradeSummary.net_pnl_eur, 2)}} EUR | avg trade = ${{fmtNumber(tradeSummary.avg_pnl_per_trade_eur, 2)}} EUR`);
       setText('pair-performance-meta', `${{fmtText(tradeSummary.closed_trades)}} closed trades | avg hold = ${{fmtNumber(tradeSummary.avg_hold_minutes, 2)}} min`);
       const copilot = overview.copilot || {{}};
-      setText('copilot-plain-status', fmtText(copilot.plain_status));
-      setText('copilot-operator-focus', fmtText(copilot.operator_focus));
-      setText('copilot-journal-hint', fmtText(copilot.journal_hint));
-      setHTML('copilot-actions', (copilot.recommended_actions || []).map((item, index) => `<div class="list-item"><strong>Action ${{index + 1}}</strong><span>${{escapeHtml(item)}}</span></div>`).join('') || '<div class="list-item"><strong>No actions</strong><span>Der Copilot hat aktuell keine weiteren Empfehlungen.</span></div>');
-      setHTML('copilot-beginner-guide', (copilot.beginner_terms || []).map(item => `<div class="list-item"><strong>${{escapeHtml(item.term)}}</strong><span>${{escapeHtml(item.simple)}}</span></div>`).join('') || '<div class="list-item"><strong>No guide entries</strong><span>Es liegen aktuell keine vereinfachten Erklärungen vor.</span></div>');
-      setHTML('copilot-warnings', (copilot.warnings || []).map(item => `<div class="list-item"><strong>${{escapeHtml(item.title)}}</strong><span>${{escapeHtml(item.detail)}}</span><span class="${{pillClassFromText(item.severity)}}">${{escapeHtml(item.simple)}}</span></div>`).join('') || '<div class="list-item"><strong>No warnings</strong><span>Aktuell meldet der Copilot keine zusaetzlichen Warnstufen.</span></div>');
-      setHTML('copilot-gate-guide', (copilot.gate_explanations || []).map(item => `<div class="list-item"><strong>${{escapeHtml(item.name)}} | ${{escapeHtml(item.status)}}</strong><span>${{escapeHtml(item.simple)}}</span><span class="path">actual: ${{escapeHtml(fmtText(item.actual))}} | threshold: ${{escapeHtml(fmtText(item.threshold))}}</span></div>`).join('') || '<div class="list-item"><strong>No gate guide</strong><span>Es liegen aktuell keine Gate-Erklaerungen vor.</span></div>');
+      setText('copilot-plain-status', shortText(copilot.plain_status, 154));
+      setText('copilot-operator-focus', shortText(copilot.operator_focus, 112));
+      setText('copilot-journal-hint', shortText(copilot.journal_hint, 116));
+      setHTML('copilot-actions', (copilot.recommended_actions || []).map((item, index) => `<div class="list-item"><strong>Action ${{index + 1}}</strong><span>${{escapeHtml(shortText(item, 104))}}</span></div>`).join('') || '<div class="compact-empty"><strong>No actions.</strong> Der Copilot hat aktuell keine weiteren Empfehlungen.</div>');
+      setHTML('copilot-beginner-guide', (copilot.beginner_terms || []).map(item => `<div class="list-item"><strong>${{escapeHtml(shortText(item.term, 28))}}</strong><span>${{escapeHtml(shortText(item.simple, 108))}}</span></div>`).join('') || '<div class="compact-empty"><strong>No guide entries.</strong> Es liegen aktuell keine vereinfachten Erklaerungen vor.</div>');
+      setHTML('copilot-warnings', (copilot.warnings || []).map(item => `<div class="list-item"><strong>${{escapeHtml(shortText(item.title, 32))}}</strong><span>${{escapeHtml(shortText(item.detail, 104))}}</span><span class="${{pillClassFromText(item.severity)}}">${{escapeHtml(shortText(item.simple, 84))}}</span></div>`).join('') || '<div class="compact-empty"><strong>No warnings.</strong> Aktuell meldet der Copilot keine zusaetzlichen Warnstufen.</div>');
+      setHTML('copilot-gate-guide', (copilot.gate_explanations || []).map(item => `<div class="list-item"><strong>${{escapeHtml(shortText(`${{item.name}} | ${{item.status}}`, 34))}}</strong><span>${{escapeHtml(shortText(item.simple, 108))}}</span><span class="path">actual: ${{escapeHtml(fmtText(item.actual))}} | threshold: ${{escapeHtml(fmtText(item.threshold))}}</span></div>`).join('') || '<div class="compact-empty"><strong>No gate guide.</strong> Es liegen aktuell keine Gate-Erklaerungen vor.</div>');
       renderTradeDetail(overview);
       const pairStatus = history.pair_status || {{}};
       setHTML('pair-history-body', Object.entries(pairStatus).map(([symbol, row]) => `<tr><td>${{escapeHtml(symbol)}}</td><td>${{fmtText(row.candles_1m)}}</td><td>${{fmtText(row.candles_15m)}}</td><td>${{fmtNumber(row.span_days, 3)}}</td><td>${{fmtDateTime(row.last_ts)}}</td></tr>`).join('') || '<tr><td colspan="5">No history loaded.</td></tr>');

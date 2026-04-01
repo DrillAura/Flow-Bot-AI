@@ -20,7 +20,14 @@ from .history import load_local_histories
 from .kraken import KrakenPublicClient
 from .live import run_live_scanner
 from .models import ActiveTrade, DayTradeIntent
-from .personal_journal import append_personal_trade, build_personal_trade_entry, ensure_personal_journal_path, run_personal_journal_report
+from .personal_journal import (
+    append_personal_trade,
+    build_personal_trade_entry,
+    ensure_personal_journal_path,
+    list_personal_journal_presets,
+    resolve_personal_journal_preset,
+    run_personal_journal_report,
+)
 from .research import run_walk_forward, run_walk_forward_optimization
 from .reporting import run_forward_test_report, run_signal_debug_report
 from .runtime_layout import build_runtime_paths, migrate_legacy_runtime
@@ -303,16 +310,19 @@ def build_parser() -> argparse.ArgumentParser:
     personal_journal_report = sub.add_parser("personal-journal-report", help="Summarize manually logged personal trades")
     personal_journal_report.add_argument("--path", default=None)
 
+    personal_journal_presets = sub.add_parser("personal-journal-presets", help="List dashboard-friendly presets for common manual trade entries")
+
     append_personal = sub.add_parser("append-personal-trade", help="Append one personal/manual trade to the local journal")
     append_personal.add_argument("--path", default=None)
-    append_personal.add_argument("--market", required=True)
-    append_personal.add_argument("--instrument", required=True)
+    append_personal.add_argument("--preset", default=None)
+    append_personal.add_argument("--market", default="")
+    append_personal.add_argument("--instrument", default="")
     append_personal.add_argument("--venue", default="")
     append_personal.add_argument("--side", default="long")
-    append_personal.add_argument("--strategy-name", required=True)
+    append_personal.add_argument("--strategy-name", default="")
     append_personal.add_argument("--setup-family", default="")
-    append_personal.add_argument("--timeframe", required=True)
-    append_personal.add_argument("--status", default="closed")
+    append_personal.add_argument("--timeframe", default="")
+    append_personal.add_argument("--status", default="")
     append_personal.add_argument("--entry-ts", default=None)
     append_personal.add_argument("--exit-ts", default=None)
     append_personal.add_argument("--entry-price", type=float, default=None)
@@ -753,17 +763,28 @@ def main() -> None:
         _emit_json(asdict(run_personal_journal_report(path)))
         return
 
+    if args.command == "personal-journal-presets":
+        _emit_json({"presets": list_personal_journal_presets()})
+        return
+
     if args.command == "append-personal-trade":
         path = Path(args.path) if args.path else Path(bot_config.personal_journal_path)
+        preset = resolve_personal_journal_preset(args.preset)
+        market = args.market or (preset or {}).get("market") or ""
+        instrument = args.instrument or (preset or {}).get("instrument") or ""
+        strategy_name = args.strategy_name or (preset or {}).get("strategy_name") or ""
+        timeframe = args.timeframe or (preset or {}).get("timeframe") or ""
+        if not market or not instrument or not strategy_name or not timeframe:
+            raise SystemExit("append-personal-trade requires market, instrument, strategy-name and timeframe unless they are provided by --preset")
         entry = build_personal_trade_entry(
-            market=args.market,
-            instrument=args.instrument,
-            venue=args.venue,
-            side=args.side,
-            strategy_name=args.strategy_name,
-            setup_family=args.setup_family,
-            timeframe=args.timeframe,
-            status=args.status,
+            market=market,
+            instrument=instrument,
+            venue=args.venue or str((preset or {}).get("venue") or ""),
+            side=args.side or str((preset or {}).get("side") or ""),
+            strategy_name=strategy_name,
+            setup_family=args.setup_family or str((preset or {}).get("setup_family") or ""),
+            timeframe=timeframe,
+            status=args.status or str((preset or {}).get("status") or "closed"),
             entry_ts=args.entry_ts,
             exit_ts=args.exit_ts,
             entry_price=args.entry_price,
@@ -776,8 +797,9 @@ def main() -> None:
             confidence_after=args.confidence_after,
             lesson=args.lesson,
             notes=args.notes,
-            tags=[item for item in args.tags.split(",") if item.strip()],
+            tags=[item for item in (args.tags or ",".join((preset or {}).get("tags") or [])).split(",") if item.strip()],
             mistakes=[item for item in args.mistakes.split(",") if item.strip()],
+            preset_id=args.preset,
         )
         _emit_json(append_personal_trade(path, entry))
         return

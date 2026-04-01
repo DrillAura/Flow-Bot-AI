@@ -5,7 +5,9 @@ from daytrading_bot.config import BotConfig
 from daytrading_bot.models import MarketContext, OrderBookSnapshot
 from daytrading_bot.strategy import (
     BreakoutPullbackStrategy,
+    FastFailedBreakoutReclaimMicroStrategy,
     FastLiquiditySweepReclaimStrategy,
+    FastLiquiditySweepReversalStrategy,
     FastMicroScalpStrategy,
     FastVwapReclaimScalpStrategy,
     OpeningRangeBreakoutStrategy,
@@ -13,8 +15,10 @@ from daytrading_bot.strategy import (
 )
 from tests.helpers import (
     build_context,
+    build_fast_failed_breakout_context,
     build_fast_micro_context,
     build_fast_sweep_context,
+    build_fast_sweep_reversal_context,
     build_fast_vwap_context,
     build_recovery_context,
 )
@@ -184,6 +188,28 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(intent.setup_type, "fast_vwap_reclaim_scalp")
         self.assertEqual(intent.regime_label, "fast_trading")
         self.assertTrue(intent.reason_code.startswith("fast_vwap_reclaim_scalp:"))
+
+    def test_fast_failed_breakout_reclaim_micro_strategy_produces_entry(self) -> None:
+        strategy = FastFailedBreakoutReclaimMicroStrategy(self.config)
+        context = build_fast_failed_breakout_context()
+
+        intent = strategy.evaluate(context)
+
+        self.assertIsNotNone(intent)
+        self.assertEqual(intent.setup_type, "fast_failed_breakout_reclaim_micro")
+        self.assertEqual(intent.regime_label, "fast_trading")
+        self.assertTrue(intent.reason_code.startswith("fast_failed_breakout_reclaim_micro:"))
+
+    def test_fast_liquidity_sweep_reversal_strategy_produces_entry(self) -> None:
+        strategy = FastLiquiditySweepReversalStrategy(self.config)
+        context = build_fast_sweep_reversal_context()
+
+        intent = strategy.evaluate(context)
+
+        self.assertIsNotNone(intent)
+        self.assertEqual(intent.setup_type, "fast_liquidity_sweep_reversal")
+        self.assertEqual(intent.regime_label, "fast_trading")
+        self.assertTrue(intent.reason_code.startswith("fast_liquidity_sweep_reversal:"))
 
 
 if __name__ == "__main__":

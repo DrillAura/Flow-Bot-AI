@@ -192,13 +192,33 @@ def build_strategy_specs() -> list[StrategySpec]:
             config_overrides={},
             promotion_allowed=False,
         ),
+        StrategySpec(
+            strategy_id="fast_failed_breakout_reclaim_micro",
+            label="Fast Failed Breakout Reclaim",
+            family="fast_trading",
+            strategy_type="fast_failed_breakout_reclaim_micro",
+            description="Research-only micro lane that waits for a failed 1m breakout and then buys the reclaim with micro thrust.",
+            config_overrides={},
+            promotion_allowed=False,
+        ),
+        StrategySpec(
+            strategy_id="fast_liquidity_sweep_reversal",
+            label="Fast Liquidity Sweep Reversal",
+            family="fast_trading",
+            strategy_type="fast_liquidity_sweep_reversal",
+            description="Research-only micro lane that demands a stronger close after a short sweep below local lows.",
+            config_overrides={},
+            promotion_allowed=False,
+        ),
     ]
 
 
 def build_strategy(strategy_spec: StrategySpec, bot_config: BotConfig):
     from .strategy import (
         BreakoutPullbackStrategy,
+        FastFailedBreakoutReclaimMicroStrategy,
         FastLiquiditySweepReclaimStrategy,
+        FastLiquiditySweepReversalStrategy,
         FastMicroScalpStrategy,
         FastVwapReclaimScalpStrategy,
         MeanReversionVwapStrategy,
@@ -238,6 +258,18 @@ def build_strategy(strategy_spec: StrategySpec, bot_config: BotConfig):
         )
     if strategy_spec.strategy_type == "fast_vwap_reclaim_scalp":
         return FastVwapReclaimScalpStrategy(
+            bot_config,
+            strategy_id=strategy_spec.strategy_id,
+            strategy_family=strategy_spec.family,
+        )
+    if strategy_spec.strategy_type == "fast_failed_breakout_reclaim_micro":
+        return FastFailedBreakoutReclaimMicroStrategy(
+            bot_config,
+            strategy_id=strategy_spec.strategy_id,
+            strategy_family=strategy_spec.family,
+        )
+    if strategy_spec.strategy_type == "fast_liquidity_sweep_reversal":
+        return FastLiquiditySweepReversalStrategy(
             bot_config,
             strategy_id=strategy_spec.strategy_id,
             strategy_family=strategy_spec.family,
